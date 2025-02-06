@@ -90,7 +90,6 @@ public class Iperfer {
 
 		// Client
 		if(client) {
-			System.out.println("Client");
 			// Check Args
 			if(!argNumCheck(7, args.length)) { return; }
 
@@ -105,7 +104,6 @@ public class Iperfer {
 
 		// Server
 		else {
-			System.out.println("Server");
 			if(!argNumCheck(3, args.length)) { return; }
 
 			int port = Integer.parseInt(args[2]);
