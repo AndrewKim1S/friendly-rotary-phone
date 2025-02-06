@@ -5,6 +5,7 @@ import java.net.*;
 public class Iperfer {
 
 	public static void client_side(String hostname, int port, int time) {
+		// packet to send
 		byte[] byteArray = new byte[1000];
 		try (
 			Socket iperfersock = new Socket(hostname, port);
@@ -22,6 +23,7 @@ public class Iperfer {
 				KBsent++;
 			}
 
+			// Calculate the rate
 			double rate = (KBsent/125) / time;
 
 			// Print statistics
@@ -39,19 +41,26 @@ public class Iperfer {
 			InputStream in = clientsock.getInputStream();
 		) {
 			
+			// start time
 			long startTime = System.currentTimeMillis();
+			// packet to read
 			byte[] byteArray = new byte[1000];
+			
+			// data
 			int KBreceived = 0;
+			int received = 0;
 			int bytesRead = 0;
 
+			// Keep reading while data is being sent
 			while(bytesRead != -1) {
 				bytesRead = in.read(byteArray, 0, 1000);
-				KBreceived += bytesRead/1000;
+				received += bytesRead;
 			}
+			KBreceived = received/1000;
 
 			// Print statistics
 			long endTime = System.currentTimeMillis();
-			double rate = (KBreceived/125) / (endTime - startTime) * 1000;
+			double rate = (KBreceived/125) / ((endTime - startTime) / 1000);
 			System.out.println("received=" + KBreceived + " KB rate=" + rate + " Mbps");
 
 		} catch (Exception e) {
