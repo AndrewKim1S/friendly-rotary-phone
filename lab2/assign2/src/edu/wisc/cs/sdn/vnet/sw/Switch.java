@@ -64,7 +64,7 @@ public class Switch extends Device
 		// flood/broadcast
 		else {
 			for(Iface iface : interfaces.values()) {
-				if(iface.equals(inIface)) {
+				if(!iface.equals(inIface)) {
 					sendPacket(etherPacket, iface);
 				}
 			}
