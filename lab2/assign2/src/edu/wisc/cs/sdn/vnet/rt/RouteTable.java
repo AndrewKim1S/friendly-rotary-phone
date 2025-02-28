@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+// import java.lang.*;
+
 import net.floodlightcontroller.packet.IPv4;
 
 import edu.wisc.cs.sdn.vnet.Iface;
@@ -37,12 +39,27 @@ public class RouteTable
 	{
 		synchronized(this.entries)
 		{
-			/*****************************************************************/
-			/* TODO: Find the route entry with the longest prefix match	  */
-			
-			return null;
-			
-			/*****************************************************************/
+			// System.out.println("ip: " + IPv4.fromIPv4Address(ip));
+
+			RouteEntry bestMatch = null;
+			int best_num = 0;
+			for(RouteEntry r: entries) {
+
+				int entry_dst = r.getDestinationAddress();
+				// int entry_mask = r.getMaskAddress();
+				
+				int xor = ip ^ entry_dst;
+				int leading_zero = Integer.numberOfLeadingZeros(xor);
+				// check that number of leading 0s (leading_zero) >= number of leading 1s in mask
+				if(best_num < leading_zero) {
+					best_num = leading_zero;
+					bestMatch = r;
+				}
+
+				// System.out.println("dst: " + IPv4.fromIPv4Address(entry_dst));
+			}
+			// System.out.println("chose: " + IPv4.fromIPv4Address(bestMatch.getDestinationAddress()));
+			return bestMatch;
 		}
 	}
 	
