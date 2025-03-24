@@ -136,7 +136,29 @@ public class Router extends Device
 
 		this.sendPacket(etherPacket, e.getInterface());
 		/********************************************************************/
+	}
 
+	// Function to get directly reachable subnets via rotuer interfaces
+	public void startRIP() {
+		System.out.println("StartRIP");
+		
+		for(Iface inter_ip : interfaces.values()) {
+			int dst_ip = inter_ip.getIpAddress();
+			int sub_mask = inter_ip.getSubnetMask();
+			this.routeTable.insert(dst_ip, 0, sub_mask, inter_ip);
+		}
+
+		// Debug
+		System.out.println(this.routeTable);
+	}
+
+	public void RIPOperation() {
 
 	}
+
+	public void sendRIPPackets() {
+
+	}
+
 }
+
