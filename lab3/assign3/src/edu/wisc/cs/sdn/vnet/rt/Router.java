@@ -6,6 +6,12 @@ import edu.wisc.cs.sdn.vnet.Iface;
 
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.IPv4;
+import net.floodlightcontroller.packet.RIPv2;
+import net.floodlightcontroller.packet.RIPv2Entry;
+import net.floodlightcontroller.packet.UDP;
+
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * @author Aaron Gember-Jacobson and Anubhavnidhi Abhashkumar
@@ -140,24 +146,110 @@ public class Router extends Device
 
 	// Function to get directly reachable subnets via rotuer interfaces
 	public void startRIP() {
-		System.out.println("StartRIP");
-		
-		for(Iface inter_ip : interfaces.values()) {
-			int dst_ip = inter_ip.getIpAddress();
-			int sub_mask = inter_ip.getSubnetMask();
-			this.routeTable.insert(dst_ip, 0, sub_mask, inter_ip);
+		for(Iface iface : interfaces.values()) {
+			int dst_ip = iface.getIpAddress();
+			int mask = iface.getSubnetMask();
+			int subnet = mask & dst_ip;
+			this.routeTable.insert(subnet, 0, mask, iface);
 		}
 
 		// Debug
+		System.out.println("Start RIP Route Table: ");
 		System.out.println(this.routeTable);
+
+		sendRIPRequest();
+
+		// Set Timer 10s
+		Timer timer = new Timer();
+		TimerTask task = new TimerTask() {
+			public void run() {
+				sendRIPResponse();
+			}
+		};
+		timer.scheduleAtFixedRate(task, 0, 10000);
+
 	}
 
-	public void RIPOperation() {
+	// Function to send RIP request out of all router interfaces after initialization
+	public void sendRIPRequest() {
+		for(Iface iface : interfaces.values()) {
+			// Setup the RIPv2 packet - Application Layer
+			RIPv2 rip_pack = new RIPv2();
+			int addr = iface.getIpAddress();
+			int mask = iface.getSubnetMask();
+			RIPv2Entry e = new RIPv2Entry(addr, mask, 16); // ?
+			e.setNextHopAddress(0);
+			rip_pack.addEntry(e);
+			byte request = 1;
+			rip_pack.setCommand(request);
 
+			// Encapsulate into UDP packet - Transport Layer
+			UDP udp_pack = new UDP();
+			udp_pack.setPayload(rip_pack);
+			udp_pack.setSourcePort(UDP.RIP_PORT);
+			udp_pack.setDestinationPort(UDP.RIP_PORT);
+
+			// IP Packet - Network Layer
+			IPv4 ip_pack = new IPv4();
+			ip_pack.setProtocol(IPv4.PROTOCOL_UDP);
+			ip_pack.setDestinationAddress("244.0.0.9");
+			ip_pack.setSourceAddress(addr);
+			ip_pack.setPayload(udp_pack);
+
+			// Ethernet Packet - Link Layer
+			Ethernet eth_pack = new Ethernet();
+			eth_pack.setDestinationMACAddress("FF:FF:FF:FF:FF:FF");
+			eth_pack.setSourceMACAddress(iface.getMacAddress().toBytes());
+			eth_pack.setPayload(ip_pack);
+
+			// send packet
+			System.out.println("Should send packet out of interface: " + iface);
+			this.sendPacket(eth_pack, iface);
+		}
 	}
 
-	public void sendRIPPackets() {
+	public void sendRIPResponse() {
+		for(Iface iface : interfaces.values()) {
+			// Setup the RIPv2 packet - Application Layer
+			RIPv2 rip_pack = new RIPv2();
+			int addr = iface.getIpAddress();
+			int mask = iface.getSubnetMask();
 
+			// Loop through all entries in Routing Table
+			// Add RIPv2Entry for each one
+			for(RouteEntry e : routeTable.getEntries()) {
+				RIPv2Entry entry = new RIPv2Entry(e.getDestinationAddress(), 
+					e.getMaskAddress(), e.getMetric()); // ?
+				entry.setNextHop(addr); // ?
+				rip_pack.addEntry(entry);
+			}
+
+			byte response = 2;
+			rip_pack.setCommand(response);
+
+			// Encapsulate into UDP packet - Transport Layer
+			UDP udp_pack = new UDP();
+			udp_pack.setPayload(rip_pack);
+			udp_pack.setSourcePort(UDP.RIP_PORT);
+			udp_pack.setDestinationPort(UDP.RIP_PORT);
+
+			// IP Packet - Network Layer
+			IPv4 ip_pack = new IPv4();
+			ip_pack.setProtocol(IPv4.PROTOCOL_UDP);
+			ip_pack.setDestinationAddress("244.0.0.9");
+			ip_pack.setSourceAddress(addr);
+			ip_pack.setPayload(udp_pack);
+
+			// Ethernet Packet - Link Layer
+			Ethernet eth_pack = new Ethernet();
+			eth_pack.setDestinationMACAddress("FF:FF:FF:FF:FF:FF");
+			eth_pack.setSourceMACAddress(iface.getMacAddress().toBytes());
+			eth_pack.setPayload(ip_pack);
+
+			// send packet
+			System.out.println("Should send packet out of interface: " + iface);
+			this.sendPacket(eth_pack, iface);
+		}
 	}
 
 }

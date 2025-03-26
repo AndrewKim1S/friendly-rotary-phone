@@ -22,6 +22,8 @@ public class RouteEntry
 	 * the destination or gateway */
 	private Iface iface;
 	
+	private int metric;
+
 	/**
 	 * Create a new route table entry.
 	 * @param destinationAddress destination IP address
@@ -38,6 +40,8 @@ public class RouteEntry
 		this.maskAddress = maskAddress;
 		this.iface = iface;
 	}
+
+	public int getMetric() { return metric; }
 	
 	/**
 	 * @return destination IP address

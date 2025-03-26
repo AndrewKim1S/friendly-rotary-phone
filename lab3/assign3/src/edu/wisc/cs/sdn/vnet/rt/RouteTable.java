@@ -30,6 +30,8 @@ public class RouteTable
 	public RouteTable()
 	{ this.entries = new LinkedList<RouteEntry>(); }
 	
+	public List<RouteEntry> getEntries() { return entries; }
+
 	/**
 	 * Lookup the route entry that matches a given IP address.
 	 * @param ip IP address
