@@ -41,7 +41,18 @@ public class RouteEntry
 		this.iface = iface;
 	}
 
+	public RouteEntry(int destinationAddress, int gatewayAddress, 
+			int maskAddress, Iface iface, int metric)
+	{
+		this.destinationAddress = destinationAddress;
+		this.gatewayAddress = gatewayAddress;
+		this.maskAddress = maskAddress;
+		this.iface = iface;
+		this.metric = metric;
+	}
+
 	public int getMetric() { return metric; }
+	public void setMetric(int m) { metric = m; }
 	
 	/**
 	 * @return destination IP address
