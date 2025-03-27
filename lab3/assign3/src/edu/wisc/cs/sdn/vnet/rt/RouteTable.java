@@ -172,9 +172,9 @@ public class RouteTable
 			this.entries.add(entry);
 		}
 	}
-	public void insert(int dstIp, int gwIp, int maskIp, Iface iface, int metric)
+	public void insert(int dstIp, int gwIp, int maskIp, Iface iface, int metric, long time)
 	{
-		RouteEntry entry = new RouteEntry(dstIp, gwIp, maskIp, iface, metric);
+		RouteEntry entry = new RouteEntry(dstIp, gwIp, maskIp, iface, metric, time);
 		synchronized(this.entries)
 		{ 
 			this.entries.add(entry);
@@ -217,7 +217,7 @@ public class RouteTable
 		}
 		return true;
 	}
-	public boolean update(int dstIp, int maskIp, int gwIp, Iface iface, int metric)
+	public boolean update(int dstIp, int maskIp, int gwIp, Iface iface, int metric, long time)
 	{
 		synchronized(this.entries)
 		{
@@ -226,6 +226,7 @@ public class RouteTable
 			entry.setGatewayAddress(gwIp);
 			entry.setInterface(iface);
 			entry.setMetric(metric);
+			entry.setTime(time);
 		}
 		return true;
 	}

@@ -100,7 +100,7 @@ public class Router extends Device
 			if(transport_packet.getDestinationPort() == UDP.RIP_PORT) {
 				RIPv2 rip_pack = (RIPv2) (transport_packet.getPayload());
 				
-				System.out.println("\nRIP Packet Received: " + inIface);
+				// System.out.println("\nRIP Packet Received: " + inIface);
 				handleRIP(rip_pack, packet, etherPacket, inIface);
 			}
 		}
@@ -160,7 +160,7 @@ public class Router extends Device
 	public void handleRIP(RIPv2 H_rip_pack, IPv4 H_ip_pack, Ethernet H_eth_pack, Iface inIface) {
 		// Check Request vs Response
 		if(H_rip_pack.getCommand() == 1) {
-			System.out.println("\tRequest Packet");
+			// System.out.println("\tRequest Packet");
 			// Request packet
 			
 			// Setup the RIPv2 packet - Application Layer
@@ -201,8 +201,7 @@ public class Router extends Device
 			this.sendPacket(eth_pack, inIface);
 
 		} else {
-			// BROKEN
-			System.out.println("\tResponse");
+			// System.out.println("\tResponse");
 			// Response packet
 			List<RIPv2Entry> response_ents = H_rip_pack.getEntries();
 			for(RIPv2Entry entry : response_ents) {
@@ -214,20 +213,22 @@ public class Router extends Device
 				// Check if entry exists in our rt
 				RouteEntry r = routeTable.find_p(dst_ip, sub_mask);
 				if(r != null) {
-					System.out.println("\tentry exists in route table");
+					// System.out.println("\tentry exists in route table");
 					int known_metric = r.getMetric();
-					if(known_metric > new_metric) {
-						routeTable.update(dst_ip, sub_mask, gw_ip, inIface, new_metric);
-						System.out.println("\tupdate route table");
+					if(known_metric == new_metric) {
+						r.setTime(System.currentTimeMillis());
+					}
+					else if(known_metric > new_metric) {
+						routeTable.update(dst_ip, sub_mask, gw_ip, inIface, new_metric, System.currentTimeMillis());
+						//System.out.println("\tupdate route table");
 					}
 				}
 				// else add to our route table
 				else {
-					System.out.println("\tinsert new entry into Route table");
-					routeTable.insert(dst_ip, gw_ip, sub_mask, inIface, new_metric);
+					//System.out.println("\tinsert new entry into Route table");
+					routeTable.insert(dst_ip, gw_ip, sub_mask, inIface, new_metric, System.currentTimeMillis());
 				}
 			}
-			System.out.println(routeTable + "\n");	
 		}
 	}
 
@@ -237,24 +238,41 @@ public class Router extends Device
 			int addr = iface.getIpAddress();
 			int mask = iface.getSubnetMask();
 			int subnet = mask & addr; //?
-			this.routeTable.insert(subnet, 0, mask, iface, 1);
+			this.routeTable.insert(subnet, 0, mask, iface, 1, System.currentTimeMillis());
 		}
 
 		// Debug
-		System.out.println("\nStart RIP Route Table: ");
 		System.out.println(this.routeTable + "\n");
 
 		sendRIP((byte) 1);
 
+		// Timer for sending out packets RIP responses
 		// Set Timer 10s
 		Timer timer = new Timer();
 		TimerTask task = new TimerTask() {
 			public void run() {
-				System.out.println("\n---> Sending Packets 10s \n");
+				// Debug (printout routeTable)
+				System.out.println(routeTable + "\n");	
 				sendRIP((byte) 2);
 			}
 		};
 		timer.scheduleAtFixedRate(task, 10000, 10000);
+
+		// Timer for removing entries in route table
+		// Set Time 1s
+		Timer timer2 = new Timer();
+		TimerTask task2 = new TimerTask() {
+			public void run() {
+				for(RouteEntry entry : routeTable.getEntries()) {
+					long curr_time = System.currentTimeMillis();
+					if((curr_time - entry.getTime() > 30000) && 
+					(entry.getGatewayAddress() != 0)) {
+						routeTable.remove(entry.getDestinationAddress(), entry.getMaskAddress());
+					}
+				}
+			}
+		};
+		timer2.scheduleAtFixedRate(task2, 30000, 1000);
 
 	}
 

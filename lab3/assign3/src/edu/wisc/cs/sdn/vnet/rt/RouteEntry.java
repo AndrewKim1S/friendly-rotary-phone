@@ -24,6 +24,8 @@ public class RouteEntry
 	
 	private int metric;
 
+	private long last_updated_time;
+
 	/**
 	 * Create a new route table entry.
 	 * @param destinationAddress destination IP address
@@ -42,17 +44,21 @@ public class RouteEntry
 	}
 
 	public RouteEntry(int destinationAddress, int gatewayAddress, 
-			int maskAddress, Iface iface, int metric)
+			int maskAddress, Iface iface, int metric, long time)
 	{
 		this.destinationAddress = destinationAddress;
 		this.gatewayAddress = gatewayAddress;
 		this.maskAddress = maskAddress;
 		this.iface = iface;
 		this.metric = metric;
+		this.last_updated_time = time;
 	}
 
 	public int getMetric() { return metric; }
 	public void setMetric(int m) { metric = m; }
+
+	public long getTime() { return last_updated_time; }
+	public void setTime(long t) { last_updated_time = t; }
 	
 	/**
 	 * @return destination IP address
