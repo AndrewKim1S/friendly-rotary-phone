@@ -12,6 +12,7 @@ import net.floodlightcontroller.packet.UDP;
 
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.List;
 
 /**
  * @author Aaron Gember-Jacobson and Anubhavnidhi Abhashkumar
@@ -92,8 +93,19 @@ public class Router extends Device
 		/********************************************************************/
 		if(etherPacket.getEtherType() != Ethernet.TYPE_IPv4) { return; }
 
-		// Verify Checksum
 		IPv4 packet = (IPv4) (etherPacket.getPayload());
+		// Check packet for RIP
+		if(packet.getProtocol() == IPv4.PROTOCOL_UDP) {
+			UDP transport_packet = (UDP) (packet.getPayload());
+			if(transport_packet.getDestinationPort() == UDP.RIP_PORT) {
+				RIPv2 rip_pack = (RIPv2) (transport_packet.getPayload());
+				
+				// System.out.println("\nRIP Packet Received: " + inIface);
+				handleRIP(rip_pack, packet, etherPacket, inIface);
+			}
+		}
+
+		// Verify Checksum
 		short checksum = packet.getChecksum();
 		packet.resetChecksum();
 		byte[] serialized = packet.serialize();
@@ -144,88 +156,26 @@ public class Router extends Device
 		/********************************************************************/
 	}
 
-	// Function to get directly reachable subnets via rotuer interfaces
-	public void startRIP() {
-		for(Iface iface : interfaces.values()) {
-			int dst_ip = iface.getIpAddress();
-			int mask = iface.getSubnetMask();
-			int subnet = mask & dst_ip;
-			this.routeTable.insert(subnet, 0, mask, iface);
-		}
-
-		// Debug
-		System.out.println("Start RIP Route Table: ");
-		System.out.println(this.routeTable);
-
-		sendRIPRequest();
-
-		// Set Timer 10s
-		Timer timer = new Timer();
-		TimerTask task = new TimerTask() {
-			public void run() {
-				sendRIPResponse();
-			}
-		};
-		timer.scheduleAtFixedRate(task, 0, 10000);
-
-	}
-
-	// Function to send RIP request out of all router interfaces after initialization
-	public void sendRIPRequest() {
-		for(Iface iface : interfaces.values()) {
+	// Function to handle RIP packets
+	public void handleRIP(RIPv2 H_rip_pack, IPv4 H_ip_pack, Ethernet H_eth_pack, Iface inIface) {
+		// Check Request vs Response
+		if(H_rip_pack.getCommand() == 1) {
+			// System.out.println("\tRequest Packet");
+			// Request packet
+			
 			// Setup the RIPv2 packet - Application Layer
 			RIPv2 rip_pack = new RIPv2();
-			int addr = iface.getIpAddress();
-			int mask = iface.getSubnetMask();
-			RIPv2Entry e = new RIPv2Entry(addr, mask, 16); // ?
-			e.setNextHopAddress(0);
-			rip_pack.addEntry(e);
-			byte request = 1;
-			rip_pack.setCommand(request);
-
-			// Encapsulate into UDP packet - Transport Layer
-			UDP udp_pack = new UDP();
-			udp_pack.setPayload(rip_pack);
-			udp_pack.setSourcePort(UDP.RIP_PORT);
-			udp_pack.setDestinationPort(UDP.RIP_PORT);
-
-			// IP Packet - Network Layer
-			IPv4 ip_pack = new IPv4();
-			ip_pack.setProtocol(IPv4.PROTOCOL_UDP);
-			ip_pack.setDestinationAddress("244.0.0.9");
-			ip_pack.setSourceAddress(addr);
-			ip_pack.setPayload(udp_pack);
-
-			// Ethernet Packet - Link Layer
-			Ethernet eth_pack = new Ethernet();
-			eth_pack.setDestinationMACAddress("FF:FF:FF:FF:FF:FF");
-			eth_pack.setSourceMACAddress(iface.getMacAddress().toBytes());
-			eth_pack.setPayload(ip_pack);
-
-			// send packet
-			System.out.println("Should send packet out of interface: " + iface);
-			this.sendPacket(eth_pack, iface);
-		}
-	}
-
-	public void sendRIPResponse() {
-		for(Iface iface : interfaces.values()) {
-			// Setup the RIPv2 packet - Application Layer
-			RIPv2 rip_pack = new RIPv2();
-			int addr = iface.getIpAddress();
-			int mask = iface.getSubnetMask();
 
 			// Loop through all entries in Routing Table
 			// Add RIPv2Entry for each one
 			for(RouteEntry e : routeTable.getEntries()) {
 				RIPv2Entry entry = new RIPv2Entry(e.getDestinationAddress(), 
 					e.getMaskAddress(), e.getMetric()); // ?
-				entry.setNextHop(addr); // ?
+				entry.setNextHopAddress(inIface.getIpAddress());
 				rip_pack.addEntry(entry);
 			}
 
-			byte response = 2;
-			rip_pack.setCommand(response);
+			rip_pack.setCommand((byte) 2);
 
 			// Encapsulate into UDP packet - Transport Layer
 			UDP udp_pack = new UDP();
@@ -236,18 +186,145 @@ public class Router extends Device
 			// IP Packet - Network Layer
 			IPv4 ip_pack = new IPv4();
 			ip_pack.setProtocol(IPv4.PROTOCOL_UDP);
-			ip_pack.setDestinationAddress("244.0.0.9");
+			ip_pack.setDestinationAddress(H_ip_pack.getSourceAddress()); //
+			ip_pack.setSourceAddress(inIface.getIpAddress()); //
+			ip_pack.setPayload(udp_pack);
+
+			// Ethernet Packet - Link Layer
+			Ethernet eth_pack = new Ethernet();
+			eth_pack.setEtherType(Ethernet.TYPE_IPv4);
+			eth_pack.setDestinationMACAddress(H_eth_pack.getSourceMACAddress());
+			eth_pack.setSourceMACAddress(inIface.getMacAddress().toBytes());
+			eth_pack.setPayload(ip_pack);
+
+			// send packet
+			this.sendPacket(eth_pack, inIface);
+
+		} else {
+			// System.out.println("\tResponse");
+			// Response packet
+			List<RIPv2Entry> response_ents = H_rip_pack.getEntries();
+			for(RIPv2Entry entry : response_ents) {
+				int dst_ip = entry.getAddress();
+				int gw_ip = entry.getNextHopAddress();
+				int sub_mask = entry.getSubnetMask();
+				int new_metric = entry.getMetric() + 1;
+
+				// Check if entry exists in our rt
+				RouteEntry r = routeTable.find_p(dst_ip, sub_mask);
+				if(r != null) {
+					// System.out.println("\tentry exists in route table");
+					int known_metric = r.getMetric();
+					if(known_metric == new_metric) {
+						r.setTime(System.currentTimeMillis());
+					}
+					else if(known_metric > new_metric) {
+						routeTable.update(dst_ip, sub_mask, gw_ip, inIface, new_metric, System.currentTimeMillis());
+						//System.out.println("\tupdate route table");
+					}
+				}
+				// else add to our route table
+				else {
+					//System.out.println("\tinsert new entry into Route table");
+					routeTable.insert(dst_ip, gw_ip, sub_mask, inIface, new_metric, System.currentTimeMillis());
+				}
+			}
+		}
+	}
+
+	// Function to get directly reachable subnets via rotuer interfaces
+	public void startRIP() {
+		for(Iface iface : interfaces.values()) {
+			int addr = iface.getIpAddress();
+			int mask = iface.getSubnetMask();
+			int subnet = mask & addr; //?
+			this.routeTable.insert(subnet, 0, mask, iface, 1, System.currentTimeMillis());
+		}
+
+		// Debug
+		System.out.println(this.routeTable + "\n");
+
+		sendRIP((byte) 1);
+
+		// Timer for sending out packets RIP responses
+		// Set Timer 10s
+		Timer timer = new Timer();
+		TimerTask task = new TimerTask() {
+			public void run() {
+				// Debug (printout routeTable)
+				System.out.println(routeTable + "\n");	
+				sendRIP((byte) 2);
+			}
+		};
+		timer.scheduleAtFixedRate(task, 10000, 10000);
+
+		// Timer for removing entries in route table
+		// Set Time 1s
+		Timer timer2 = new Timer();
+		TimerTask task2 = new TimerTask() {
+			public void run() {
+				for(RouteEntry entry : routeTable.getEntries()) {
+					long curr_time = System.currentTimeMillis();
+					if((curr_time - entry.getTime() > 30000) && 
+					(entry.getGatewayAddress() != 0)) {
+						routeTable.remove(entry.getDestinationAddress(), entry.getMaskAddress());
+					}
+				}
+			}
+		};
+		timer2.scheduleAtFixedRate(task2, 30000, 1000);
+
+	}
+
+	// Function to send RIP (broadcast) 1 for request, 2 for response
+	public void sendRIP(byte cmd) {
+		for(Iface iface : interfaces.values()) {
+			// Setup the RIPv2 packet - Application Layer
+			RIPv2 rip_pack = new RIPv2();
+			int addr = iface.getIpAddress();
+			int mask = iface.getSubnetMask();
+
+			// request
+			if(cmd == 1) {
+				RIPv2Entry e = new RIPv2Entry(addr, mask, 16); // ?
+				e.setNextHopAddress(0);
+				rip_pack.addEntry(e);
+			}
+			// response
+			else if(cmd == 2) {
+				// Loop through all entries in Routing Table
+				// Add RIPv2Entry for each one
+				for(RouteEntry e : routeTable.getEntries()) {
+					RIPv2Entry entry = new RIPv2Entry(e.getDestinationAddress(), e.getMaskAddress(), e.getMetric()); // ?
+					entry.setNextHopAddress(addr); // ?
+					rip_pack.addEntry(entry);
+				}
+			}
+
+			rip_pack.setCommand(cmd);
+
+			// Encapsulate into UDP packet - Transport Layer
+			UDP udp_pack = new UDP();
+			udp_pack.setPayload(rip_pack);
+			udp_pack.setSourcePort(UDP.RIP_PORT);
+			udp_pack.setDestinationPort(UDP.RIP_PORT);
+
+			// IP Packet - Network Layer
+			IPv4 ip_pack = new IPv4();
+			ip_pack.setProtocol(IPv4.PROTOCOL_UDP);
+			ip_pack.setDestinationAddress("224.0.0.9");
 			ip_pack.setSourceAddress(addr);
 			ip_pack.setPayload(udp_pack);
 
 			// Ethernet Packet - Link Layer
 			Ethernet eth_pack = new Ethernet();
+			eth_pack.setEtherType(Ethernet.TYPE_IPv4);
 			eth_pack.setDestinationMACAddress("FF:FF:FF:FF:FF:FF");
 			eth_pack.setSourceMACAddress(iface.getMacAddress().toBytes());
 			eth_pack.setPayload(ip_pack);
 
 			// send packet
-			System.out.println("Should send packet out of interface: " + iface);
+			// System.out.println("Should send packet out of interface: " + iface);
 			this.sendPacket(eth_pack, iface);
 		}
 	}
