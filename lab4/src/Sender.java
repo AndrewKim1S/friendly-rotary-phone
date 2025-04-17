@@ -2,6 +2,10 @@ import java.io.FileInputStream;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.net.DatagramPacket;
+import java.net.InetAddress;
+import java.net.DatagramSocket;
+
 
 public class Sender {
 	int port;
@@ -17,6 +21,8 @@ public class Sender {
 
 	FileInputStream fis; // will read input file per byte 
 	File file;
+
+	DatagramSocket socket;
 
 	public static final int MAX_RETRANSMISSIONS = 16;
 	public static final int TCP_PACKET_LEN = 24;
@@ -36,10 +42,9 @@ public class Sender {
 		try {
 			fis = new FileInputStream(this.filename);
 			file = new File(this.filename);
-		} catch (Exception e) {
-			System.out.println("Problem with FileInputStream or File");
-			e.printStackTrace();
-		}
+			socket = new DatagramSocket(port);
+		} catch (Exception e) { e.printStackTrace(); }
+
 
 		sendSegment();
 	}
@@ -54,8 +59,12 @@ public class Sender {
 
 			byte[] data = getData();          // get segment (parse from input file)
 			byte[] tcp = createGenTCP(data);  // create tcp packet
-			
-			
+			// create udp (datagram packet)
+			try{
+				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, InetAddress.getByName(remote_ip), remote_port);
+				socket.send(UDP_packet);
+			} catch (Exception e) { e.printStackTrace(); }
+
 			seq_num++;
 		}
 	}
