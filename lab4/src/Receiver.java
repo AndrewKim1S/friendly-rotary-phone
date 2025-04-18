@@ -46,23 +46,43 @@ public class Receiver {
 	}
 
 	private void parseData(byte[] data) {
-		int seq_num = ByteBuffer.wrap(data).getInt();
-		int ack_num = ByteBuffer.wrap(data).getInt();
-		long timestamp = ByteBuffer.wrap(data).getLong();
-		int length = ByteBuffer.wrap(data).getInt();
+		int seq_num = ByteBuffer.wrap(data).getInt(0);
+		int ack_num = ByteBuffer.wrap(data).getInt(4);
+		long timestamp = ByteBuffer.wrap(data).getLong(8);
+		int length = ByteBuffer.wrap(data).getInt(16);
 		boolean SYN = (length & 1) != 0;
 		length = length >>> 1;
 		boolean FIN = (length & 1) != 0;
 		length = length >>> 1;
 		boolean ACK = (length & 1) != 0;
 		length = length >>> 1;
-		short zeroes = ByteBuffer.wrap(data).getShort();
-		short checksum = ByteBuffer.wrap(data).getShort();
+		// short zeroes = ByteBuffer.wrap(data).getShort();
+		short checksum = ByteBuffer.wrap(data).getShort(22);
 		byte[] payload = new byte[length];
-		ByteBuffer.wrap(data).get(payload);
+		System.arraycopy(data, 24, payload, 0, length);
 
+		System.out.println("\nReceived Packet");
+		System.out.println("Seq: " + seq_num);
+		System.out.println("Ack: " + ack_num);
+		System.out.println("Timestamp: " + timestamp);
+		System.out.println("Length: " + length);
+		System.out.println("SYN: " + SYN + " FIN: " + FIN + " ACK: " + ACK);
+		System.out.println("Data: " + new String(payload));
 
-		System.out.println("Received: " + new String(payload));
+		// 3 Way handshake
+		if(SYN) {
+
+		}
+		
+		// Teardown the TCP connection
+		else if(FIN) {
+
+		}
+
+		// 3 Way handshake
+		else if(ACK) {
+
+		}
 	}
 
 }
