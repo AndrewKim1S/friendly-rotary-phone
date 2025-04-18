@@ -33,3 +33,8 @@ public class TCPend {
 		Receiver _receiver = new Receiver(port, mtu, sws, filename);
 	}
 }
+
+
+// simple testing on local
+// java TCPend -p 500 -m 5 -c 50 -f output
+// java TCPend -p 499 -s 127.0.0.1 -a 500 f input -m 5 -c 50

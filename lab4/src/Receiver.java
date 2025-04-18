@@ -56,10 +56,12 @@ public class Receiver {
 
 			Util.outputSegmentInfo(false, timestamp, S, F, A, false, seq_num, length, ack_num);
 
+			// verify checksum
+
 			// FIN flag is set then start teardown of TCP
 			if(F) {
 
-			}
+			} else { sendAck(); }
 		}
 	}
 
