@@ -27,6 +27,7 @@ public class Sender {
 	public static final int MAX_RETRANSMISSIONS = 16;
 	public static final int TCP_PACKET_LEN = 24;
 
+
 	public Sender(int port, String remote_ip, int remote_port, String filename, int mtu, int sws) {
 		this.port = port;
 		this.remote_ip = remote_ip;
@@ -49,6 +50,7 @@ public class Sender {
 		sendSegment();
 	}
 
+
 	// Send Segments
 	private void sendSegment() {
 		// As long as there is still info to be sent, continue sending
@@ -65,9 +67,12 @@ public class Sender {
 				socket.send(UDP_packet);
 			} catch (Exception e) { e.printStackTrace(); }
 
+			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, seq_num, data.length, 0);
+
 			seq_num++;
 		}
 	}
+
 
 	// Get 1 segment from file to send
 	private byte[] getData() {
@@ -88,6 +93,7 @@ public class Sender {
 		}
 		return data;
 	}
+
 
 	// Create generic TCP byte[] with data
 	private byte[] createGenTCP(byte[] data) {
@@ -145,8 +151,5 @@ public class Sender {
 /*for (byte b : tcp) {
 	System.out.print(Integer.toBinaryString((b & 0xFF) + 0x100).substring(1) + " ");
 }*/
-
-// Print byte[] in terms of string
-// System.out.println(new String(data));
 
 

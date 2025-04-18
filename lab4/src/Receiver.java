@@ -28,9 +28,11 @@ public class Receiver {
 			socket = new DatagramSocket(port);
 		} catch(Exception e) { e.printStackTrace(); }
 
+		// handle 3 way handshake 
 		receiveSegment();
 	}
 
+	
 	// Receive Segment
 	private void receiveSegment() {
 		while(receiving) {
@@ -41,48 +43,44 @@ public class Receiver {
 			} catch (Exception e) { e.printStackTrace(); }
 
 			// parse packet
-			parseData(packet.getData());
+			byte[] packetData = packet.getData();
+			int seq_num = Util.TCPGetSeqNum(packetData);
+			int ack_num = Util.TCPGetAckNum(packetData);
+			long timestamp = Util.TCPGetTime(packetData);
+			int length = Util.TCPGetLen(packetData);
+			boolean S = Util.TCPGetSYN(packetData);
+			boolean F = Util.TCPGetFIN(packetData);
+			boolean A = Util.TCPGetACK(packetData);
+			short checksum = Util.TCPGetChecksum(packetData);
+			byte[] payload = Util.TCPGetData(packetData);
+
+			Util.outputSegmentInfo(false, timestamp, S, F, A, false, seq_num, length, ack_num);
+
+			// FIN flag is set then start teardown of TCP
+			if(F) {
+
+			}
 		}
 	}
 
-	private void parseData(byte[] data) {
-		int seq_num = ByteBuffer.wrap(data).getInt(0);
-		int ack_num = ByteBuffer.wrap(data).getInt(4);
-		long timestamp = ByteBuffer.wrap(data).getLong(8);
-		int length = ByteBuffer.wrap(data).getInt(16);
-		boolean SYN = (length & 1) != 0;
-		length = length >>> 1;
-		boolean FIN = (length & 1) != 0;
-		length = length >>> 1;
-		boolean ACK = (length & 1) != 0;
-		length = length >>> 1;
-		// short zeroes = ByteBuffer.wrap(data).getShort();
-		short checksum = ByteBuffer.wrap(data).getShort(22);
-		byte[] payload = new byte[length];
-		System.arraycopy(data, 24, payload, 0, length);
 
-		System.out.println("\nReceived Packet");
-		System.out.println("Seq: " + seq_num);
-		System.out.println("Ack: " + ack_num);
-		System.out.println("Timestamp: " + timestamp);
-		System.out.println("Length: " + length);
-		System.out.println("SYN: " + SYN + " FIN: " + FIN + " ACK: " + ACK);
-		System.out.println("Data: " + new String(payload));
-
-		// 3 Way handshake
-		if(SYN) {
-
-		}
+	// send Ack 
+	private void sendAck() {
 		
-		// Teardown the TCP connection
-		else if(FIN) {
-
-		}
-
-		// 3 Way handshake
-		else if(ACK) {
-
-		}
 	}
 
 }
+
+
+
+
+/*
+System.out.println("\nReceived Packet");
+System.out.println("Seq: " + seq_num);
+System.out.println("Ack: " + ack_num);
+System.out.println("Timestamp: " + timestamp);
+System.out.println("Length: " + length);
+System.out.println("SYN: " + S + " FIN: " + F + " ACK: " + A);
+System.out.println("Data: " + new String(payload));
+*/
+
