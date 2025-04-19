@@ -2,6 +2,10 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+//import java.nio.file.Files;
+//import java.nio.file.Paths;
+//import java.nio.charset.StandardCharsets;
+import java.io.FileOutputStream;
 
 
 public class Receiver {
@@ -19,6 +23,8 @@ public class Receiver {
 
 	DatagramSocket socket;
 
+	FileOutputStream writer;
+
 	public static final int TCP_PACKET_LEN = 24;
 
 	public Receiver(int port, int mtu, int sws, String filename) {
@@ -32,6 +38,7 @@ public class Receiver {
 
 		try {
 			socket = new DatagramSocket(port);
+			writer = new FileOutputStream(filename);
 		} catch(Exception e) { e.printStackTrace(); }
 
 		tcpHandshakeReceiver();
@@ -115,6 +122,9 @@ public class Receiver {
 
 			// Send ack
 			sendAck(seq, ack_num);
+			
+			// write the data to the output file
+			writeToFile(payload);
 		}
 	}
 
@@ -139,6 +149,16 @@ public class Receiver {
 			Util.outputSegmentInfo(true, time, false, false, true, false, seq_num, 0, ack_num);
 		} catch (Exception e) { e.printStackTrace(); }
 	}
+
+
+	// Write data to output file
+	private void writeToFile(byte[] data) {
+		try {
+			writer.write(data);
+		} catch (Exception e) { e.printStackTrace(); }
+	}
+
+
 }
 
 

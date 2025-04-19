@@ -10,3 +10,5 @@ $(CLASS): $(SRC)
 
 clean:
 	rm -f *.class
+	rm output
+	touch output

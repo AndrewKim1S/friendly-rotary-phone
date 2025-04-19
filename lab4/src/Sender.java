@@ -105,6 +105,12 @@ public class Sender {
 	}
 
 
+	// Sender's tcp teardown
+	private void tcpTeardownSender() {
+
+	}
+
+
 	// Send Segments
 	private void sendSegment() {
 		// As long as there is still info to be sent, continue sending
@@ -123,8 +129,11 @@ public class Sender {
 
 			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, seq_num, data.length, 0);
 
-			seq_num++;
+			seq_num += data.length;
 		}
+
+		// Send Fin
+		tcpTeardownSender();
 	}
 
 
