@@ -97,7 +97,7 @@ public class Receiver {
 
 			// parse packet
 			byte[] packetData = packet.getData();
-			int seq_num = Util.TCPGetSeqNum(packetData);
+			int seq = Util.TCPGetSeqNum(packetData);
 			int ack_num = Util.TCPGetAckNum(packetData);
 			long timestamp = Util.TCPGetTime(packetData);
 			int length = Util.TCPGetLen(packetData);
@@ -107,35 +107,36 @@ public class Receiver {
 			short checksum = Util.TCPGetChecksum(packetData);
 			byte[] payload = Util.TCPGetData(packetData);
 
-			Util.outputSegmentInfo(false, timestamp, S, F, A, false, seq_num, length, ack_num);
+			Util.outputSegmentInfo(false, timestamp, S, F, A, false, seq, length, ack_num);
 
 			// verify checksum
 
 			// FIN flag is set then start teardown of TCP
 
 			// Send ack
-			sendAck(seq_num, ack_num);
+			sendAck(seq, ack_num);
 		}
 	}
 
 
 	// send Ack 
-	private void sendAck(int seq_num, int ack_num) {
+	private void sendAck(int seq, int ack_num) {
 		byte[] TCP_packet = new byte[TCP_PACKET_LEN];
-		ByteBuffer.wrap(TCP_packet).putInt(0, seq_num);            // seq num (4 bytes)
-		ByteBuffer.wrap(TCP_packet).putInt(4, ack_num);                  // ack num (4 bytes)
-		ByteBuffer.wrap(TCP_packet).putLong(8, System.nanoTime()); // timestamp (8 bytes)
-		// Set length of data - 0, and flags A to true
 		int length = 0;
 		length = length << 0;
 		length = length << 0;
 		length = length << 1;
+		long time = System.nanoTime();
+		ByteBuffer.wrap(TCP_packet).putInt(0, seq_num);            // seq num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putInt(4, ack_num);                  // ack num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putLong(8, time); // timestamp (8 bytes)
 		ByteBuffer.wrap(TCP_packet).putInt(16, length); // length of data is 0
 
 		try{
 			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length, 
 				InetAddress.getByName(remote_ip), remote_port);
 			socket.send(UDP_packet);
+			Util.outputSegmentInfo(true, time, false, false, true, false, seq_num, 0, ack_num);
 		} catch (Exception e) { e.printStackTrace(); }
 	}
 }

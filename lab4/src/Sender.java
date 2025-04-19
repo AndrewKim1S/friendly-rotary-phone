@@ -95,6 +95,7 @@ public class Sender {
 					ByteBuffer.wrap(ack_data).putInt(16, len_flag1);
 					DatagramPacket UDP_packet = new DatagramPacket(ack_data, ack_data.length,
 						InetAddress.getByName(remote_ip), remote_port);
+					socket.send(UDP_packet);
 					Util.outputSegmentInfo(true, Util.TCPGetTime(ack_data), false, false, true, false, this.seq_num, 0, seq_num_rec);
 					this.seq_num ++;
 					break;
