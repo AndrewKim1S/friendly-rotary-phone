@@ -59,30 +59,32 @@ public class Receiver {
 			// verify checksum
 
 			// FIN flag is set then start teardown of TCP
-			if(F) {
 
-			} else { sendAck(); }
+			// Send ack
+			sendAck(seq_num, ack_num);
 		}
 	}
 
 
 	// send Ack 
-	private void sendAck() {
-		
-	}
+	private void sendAck(int seq_num, int ack_num) {
+		byte[] TCP_packet = new byte[TCP_PACKET_LEN];
+		ByteBuffer.wrap(TCP_packet).putInt(0, seq_num);            // seq num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putInt(4, ack_num);                  // ack num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putLong(8, System.nanoTime()); // timestamp (8 bytes)
+		// Set length of data - 0, and flags A to true
+		int length = 0;
+		length = length << 0;
+		length = length << 0;
+		length = length << 1;
+		ByteBuffer.wrap(TCP_packet).putInt(16, length); // length of data is 0
 
+		/*try{
+			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length, 
+				InetAddress.getByName(remote_ip), remote_port);
+			socket.send(UDP_packet);
+		} catch (Exception e) { e.printStackTrace(); } */
+	}
 }
 
-
-
-
-/*
-System.out.println("\nReceived Packet");
-System.out.println("Seq: " + seq_num);
-System.out.println("Ack: " + ack_num);
-System.out.println("Timestamp: " + timestamp);
-System.out.println("Length: " + length);
-System.out.println("SYN: " + S + " FIN: " + F + " ACK: " + A);
-System.out.println("Data: " + new String(payload));
-*/
 

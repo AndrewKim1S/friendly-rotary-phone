@@ -85,7 +85,6 @@ public final class Util {
 		short checksum = (short) ~(sum & 0xFFFF);
 		return checksum;
 	}
-
-
 }
+
 

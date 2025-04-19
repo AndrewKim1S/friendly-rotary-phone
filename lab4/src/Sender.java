@@ -46,7 +46,6 @@ public class Sender {
 			socket = new DatagramSocket(port);
 		} catch (Exception e) { e.printStackTrace(); }
 
-
 		sendSegment();
 	}
 
