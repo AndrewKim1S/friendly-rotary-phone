@@ -14,6 +14,7 @@ public final class Util {
 	}
 	public static boolean TCPGetSYN(byte[] data) {
 		int len = ByteBuffer.wrap(data).getInt(16); 
+		len = len >>> 2;
 		return (len & 1) != 0;
 	}
 	public static boolean TCPGetFIN(byte[] data) {
@@ -23,8 +24,6 @@ public final class Util {
 	}
 	public static boolean TCPGetACK(byte[] data) {
 		int len = ByteBuffer.wrap(data).getInt(16); 
-		len = len >>> 1;
-		len = len >>> 1;
 		return (len & 1) != 0;
 	}
 	public static short TCPGetChecksum(byte[] data) {
