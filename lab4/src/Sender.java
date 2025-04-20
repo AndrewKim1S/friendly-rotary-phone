@@ -9,7 +9,8 @@ import java.net.DatagramSocket;
 
 public class Sender {
 	int port;
-	String remote_ip;
+	//String remote_ip;
+	InetAddress remote_ip;
 	int remote_port;
 	String filename;
 	int mtu;
@@ -30,7 +31,7 @@ public class Sender {
 
 	public Sender(int port, String remote_ip, int remote_port, String filename, int mtu, int sws) {
 		this.port = port;
-		this.remote_ip = remote_ip;
+		//this.remote_ip = remote_ip;
 		this.remote_port = remote_port;
 		this.filename = filename;
 		this.mtu = mtu;
@@ -39,6 +40,10 @@ public class Sender {
 		this.seq_num = 0;
 		this.start_window = 0;
 		this.file_pos = 0;
+
+		try {
+			this.remote_ip = InetAddress.getByName(remote_ip);
+		} catch(Exception e) { e.printStackTrace(); }
 
 		try {
 			fis = new FileInputStream(this.filename);
@@ -65,7 +70,7 @@ public class Sender {
 		
 		try {
 			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length,
-				InetAddress.getByName(remote_ip), remote_port);
+				remote_ip, remote_port);
 			socket.send(UDP_packet);
 			Util.outputSegmentInfo(true, Util.TCPGetTime(TCP_packet), true, false, false, false, this.seq_num, 0, 0);
 			this.seq_num ++;
@@ -94,7 +99,7 @@ public class Sender {
 					ByteBuffer.wrap(ack_data).putLong(8, System.nanoTime());
 					ByteBuffer.wrap(ack_data).putInt(16, len_flag1);
 					DatagramPacket UDP_packet = new DatagramPacket(ack_data, ack_data.length,
-						InetAddress.getByName(remote_ip), remote_port);
+						remote_ip, remote_port);
 					socket.send(UDP_packet);
 					Util.outputSegmentInfo(true, Util.TCPGetTime(ack_data), false, false, true, false, this.seq_num, 0, seq_num_rec);
 					this.seq_num ++;
@@ -102,12 +107,6 @@ public class Sender {
 				}
 			}
 		} catch (Exception e) { e.printStackTrace(); }
-	}
-
-
-	// Sender's tcp teardown
-	private void tcpTeardownSender() {
-
 	}
 
 
@@ -123,7 +122,7 @@ public class Sender {
 			byte[] tcp = createGenTCP(data);  // create tcp packet
 			// create udp (datagram packet)
 			try{
-				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, InetAddress.getByName(remote_ip), remote_port);
+				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, remote_ip, remote_port);
 				socket.send(UDP_packet);
 			} catch (Exception e) { e.printStackTrace(); }
 
@@ -134,6 +133,68 @@ public class Sender {
 
 		// Send Fin
 		tcpTeardownSender();
+	}
+
+
+	// Sender's tcp teardown
+	private void tcpTeardownSender() {
+		// sender sends fin to receiver
+		byte[] Fin_TCP = new byte[TCP_PACKET_LEN];
+		int len_flag = 0;
+		len_flag = len_flag << 1;
+		len_flag = (len_flag << 1) | 1;
+		len_flag = len_flag << 1;
+		long time = System.nanoTime();
+		ByteBuffer.wrap(Fin_TCP).putInt(0, seq_num);
+		ByteBuffer.wrap(Fin_TCP).putInt(4, 1);
+		ByteBuffer.wrap(Fin_TCP).putLong(8, time);
+		ByteBuffer.wrap(Fin_TCP).putInt(16, len_flag);
+		try {
+			DatagramPacket UDP_packet = new DatagramPacket(Fin_TCP, Fin_TCP.length, remote_ip, remote_port);
+			socket.send(UDP_packet);
+			Util.outputSegmentInfo(true, time, false, true, false, false, seq_num, 0, 1);
+		} catch (Exception e) { e.printStackTrace(); }
+		
+		// sender receive fin ack from receiver
+		while(true) {
+			byte[] Fin_Ack_TCP = new byte[TCP_PACKET_LEN];
+			DatagramPacket packet = new DatagramPacket(Fin_Ack_TCP, Fin_Ack_TCP.length);
+			byte[] packetData = packet.getData();
+
+			try {	socket.receive(packet); } 
+			catch (Exception e) { e.printStackTrace(); }
+			boolean A = Util.TCPGetACK(packetData);
+			boolean F = Util.TCPGetFIN(packetData);
+
+			Util.outputSegmentInfo(false, Util.TCPGetTime(packetData), Util.TCPGetSYN(packetData), 
+				Util.TCPGetFIN(packetData), Util.TCPGetACK(packetData), false, Util.TCPGetSeqNum(packetData),
+				0, Util.TCPGetAckNum(packetData));
+		
+			if(A && F) {
+				int seq = Util.TCPGetSeqNum(packet.getData());
+				int ack = Util.TCPGetAckNum(packet.getData());
+
+				// sender sends final ack to receiver
+				byte[] Ack_TCP = new byte[TCP_PACKET_LEN];
+				int len_flag2 = 0;
+				len_flag2 = (len_flag2 << 1) | 1;
+				time = System.nanoTime();
+				ByteBuffer.wrap(Ack_TCP).putInt(0, ack);
+				ByteBuffer.wrap(Ack_TCP).putInt(4, seq + 1);
+				ByteBuffer.wrap(Ack_TCP).putLong(8, time);
+				ByteBuffer.wrap(Ack_TCP).putInt(16, len_flag2);
+				try {
+					DatagramPacket UDP_packet2 = new DatagramPacket(Ack_TCP, Ack_TCP.length, remote_ip, remote_port);
+					socket.send(UDP_packet2);
+					Util.outputSegmentInfo(true, time, false, false, true, false, ack, 0, seq + 1);
+				} catch (Exception e) { e.printStackTrace(); }
+				return;
+			}
+		}
+
+		//Util.outputSegmentInfo(false, Util.TCPGetTime(packetData), Util.TCPGetSYN(packetData), 
+		//	Util.TCPGetFIN(packetData), Util.TCPGetACK(packetData), false, Util.TCPGetSeqNum(packetData),
+		//	0, Util.TCPGetAckNum(packetData));
 	}
 
 
