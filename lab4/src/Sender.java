@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.net.DatagramPacket;
 import java.net.InetAddress;
 import java.net.DatagramSocket;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 
 public class Sender {
@@ -25,6 +26,8 @@ public class Sender {
 
 	DatagramSocket socket;
 
+	AtomicBoolean teardownStarted;
+
 	public static final int MAX_RETRANSMISSIONS = 16;
 	public static final int TCP_PACKET_LEN = 24;
 
@@ -41,6 +44,8 @@ public class Sender {
 		this.start_window = 0;
 		this.file_pos = 0;
 
+		this.teardownStarted = new AtomicBoolean(false);
+
 		try {
 			this.remote_ip = InetAddress.getByName(remote_ip);
 		} catch(Exception e) { e.printStackTrace(); }
@@ -52,7 +57,17 @@ public class Sender {
 		} catch (Exception e) { e.printStackTrace(); }
 
 		tcpHandshakeSender();
-		sendSegment();
+
+		// Create threads
+		Thread threadSend = new Thread(() -> sendSegment());
+		Thread threadRec = new Thread(() -> recAck());
+		threadSend.start();
+		threadRec.start();
+		try {
+			threadSend.join();
+			threadRec.join();
+		} catch (Exception e) {	e.printStackTrace(); }
+
 	}
 
 
@@ -131,8 +146,34 @@ public class Sender {
 			seq_num += data.length;
 		}
 
-		// Send Fin
+		// Send Fin contingent on sliding window algorithm
+		teardownStarted.set(true);
 		tcpTeardownSender();
+	}
+
+
+	// Receive acks from the receiver
+	private void recAck() {
+		while(!teardownStarted.get()) {
+			byte[] data = new byte[TCP_PACKET_LEN + mtu];
+			DatagramPacket packet = new DatagramPacket(data, data.length);
+			try {	socket.receive(packet); } 
+			catch (Exception e) { e.printStackTrace(); }
+
+			// parse packet
+			byte[] packetData = packet.getData();
+			int seq = Util.TCPGetSeqNum(packetData);
+			int ack_num = Util.TCPGetAckNum(packetData);
+			long timestamp = Util.TCPGetTime(packetData);
+			int length = Util.TCPGetLen(packetData);
+			boolean S = Util.TCPGetSYN(packetData);
+			boolean F = Util.TCPGetFIN(packetData);
+			boolean A = Util.TCPGetACK(packetData);
+			short checksum = Util.TCPGetChecksum(packetData);
+			byte[] payload = Util.TCPGetData(packetData);
+
+			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
+		}
 	}
 
 
