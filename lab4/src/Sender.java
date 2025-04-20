@@ -2,10 +2,13 @@ import java.io.FileInputStream;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.net.DatagramPacket;
 import java.net.InetAddress;
 import java.net.DatagramSocket;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 public class Sender {
@@ -18,8 +21,15 @@ public class Sender {
 	int sws;
 
 	int seq_num;
-	int start_window; // last byte sent (over segments)
 	int file_pos; // position in file we are getting segments from (over bytes)
+	
+	// Sliding window 
+	AtomicInteger start_window; 
+	AtomicInteger seg_send_ind;
+	// Map next sequence num from Receiver to segment number
+	ConcurrentHashMap<Integer, Integer> seq_seg = new ConcurrentHashMap<>();
+	// Map sequence num to bool - ie if it is in the map then it was acked out of order
+	HashMap<Integer, Boolean> outOfOrderAck = new HashMap<>();
 
 	FileInputStream fis; // will read input file per byte 
 	File file;
@@ -34,15 +44,15 @@ public class Sender {
 
 	public Sender(int port, String remote_ip, int remote_port, String filename, int mtu, int sws) {
 		this.port = port;
-		//this.remote_ip = remote_ip;
 		this.remote_port = remote_port;
 		this.filename = filename;
 		this.mtu = mtu;
 		this.sws = sws;
 
 		this.seq_num = 0;
-		this.start_window = 0;
 		this.file_pos = 0;
+		this.start_window = new AtomicInteger(1);
+		this.seg_send_ind = new AtomicInteger(1);
 
 		this.teardownStarted = new AtomicBoolean(false);
 
@@ -68,6 +78,86 @@ public class Sender {
 			threadRec.join();
 		} catch (Exception e) {	e.printStackTrace(); }
 
+	}
+
+
+	// Send Segments
+	private void sendSegment() {
+		// As long as there is still info to be sent, continue sending
+		while(file_pos < file.length()) {
+			// Sender waits 
+			while(seg_send_ind.get() >= start_window.get() + sws) {}
+			// Once window has space to send more
+
+			byte[] data = getData();          // get segment (parse from input file)
+			byte[] tcp = createGenTCP(data);  // create tcp packet
+			// create udp (datagram packet)
+			try{
+				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, remote_ip, remote_port);
+				socket.send(UDP_packet);
+			} catch (Exception e) { e.printStackTrace(); }
+			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, seq_num, data.length, 0);
+
+			// Map seq_num of packet to seg_num
+			seq_seg.put(seq_num + data.length, seg_send_ind.get());
+			// increment to the next sequence number and segment number
+			seq_num += data.length;
+			seg_send_ind.incrementAndGet();
+		}
+
+		// Send Fin contingent on sliding window algorithm
+		teardownStarted.set(true);
+		tcpTeardownSender();
+	}
+
+
+	// Receive acks from the receiver
+	private void recAck() {
+		while(!teardownStarted.get()) {
+			byte[] data = new byte[TCP_PACKET_LEN + mtu];
+			DatagramPacket packet = new DatagramPacket(data, data.length);
+			try {	socket.receive(packet); } 
+			catch (Exception e) { e.printStackTrace(); }
+
+			// parse packet
+			byte[] packetData = packet.getData();
+			int seq = Util.TCPGetSeqNum(packetData);
+			int ack_num = Util.TCPGetAckNum(packetData);
+			long timestamp = Util.TCPGetTime(packetData);
+			int length = Util.TCPGetLen(packetData);
+			boolean S = Util.TCPGetSYN(packetData);
+			boolean F = Util.TCPGetFIN(packetData);
+			boolean A = Util.TCPGetACK(packetData);
+			short checksum = Util.TCPGetChecksum(packetData);
+			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
+
+			// increment start_window if packet received is start_window th segment acked
+			int seg_num = 0; // the seq_num the receiver is acknowledging
+			if(seq_seg.containsKey(ack_num)) {
+				seg_num = seq_seg.get(ack_num);
+			} else {
+				System.out.println("\nERROR: ack_num: " + ack_num + "\n");
+			}
+
+			if(seg_num == this.start_window.get()) {
+				this.start_window.incrementAndGet();
+				seq_seg.remove(ack_num);
+
+				// Increment start window as much as possible to remove holes
+				/*while(outOfOrderAck.get(this.start_window.get())) {
+					outOfOrderAck.remove(this.start_window);
+					this.start_window.incrementAndGet();
+					seq_seg.remove(ack_num);
+				}*/
+			}
+			// handle out of order acks
+			/*else {
+				// check that the segment number is within the window other wise drop
+				if(seg_num > this.start_window.get() && seg_num <= this.start_window.get() + sws) {
+					outOfOrderAck.put(seg_num, true);
+				}
+			}*/
+		}
 	}
 
 
@@ -117,63 +207,11 @@ public class Sender {
 						remote_ip, remote_port);
 					socket.send(UDP_packet);
 					Util.outputSegmentInfo(true, Util.TCPGetTime(ack_data), false, false, true, false, this.seq_num, 0, seq_num_rec);
-					this.seq_num ++;
+					// this.seq_num ++;
 					break;
 				}
 			}
 		} catch (Exception e) { e.printStackTrace(); }
-	}
-
-
-	// Send Segments
-	private void sendSegment() {
-		// As long as there is still info to be sent, continue sending
-		while(file_pos < file.length()) {
-			// Sender waits 
-			while(file_pos == start_window + sws) {}
-			// Once window has space to send more
-
-			byte[] data = getData();          // get segment (parse from input file)
-			byte[] tcp = createGenTCP(data);  // create tcp packet
-			// create udp (datagram packet)
-			try{
-				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, remote_ip, remote_port);
-				socket.send(UDP_packet);
-			} catch (Exception e) { e.printStackTrace(); }
-
-			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, seq_num, data.length, 0);
-
-			seq_num += data.length;
-		}
-
-		// Send Fin contingent on sliding window algorithm
-		teardownStarted.set(true);
-		tcpTeardownSender();
-	}
-
-
-	// Receive acks from the receiver
-	private void recAck() {
-		while(!teardownStarted.get()) {
-			byte[] data = new byte[TCP_PACKET_LEN + mtu];
-			DatagramPacket packet = new DatagramPacket(data, data.length);
-			try {	socket.receive(packet); } 
-			catch (Exception e) { e.printStackTrace(); }
-
-			// parse packet
-			byte[] packetData = packet.getData();
-			int seq = Util.TCPGetSeqNum(packetData);
-			int ack_num = Util.TCPGetAckNum(packetData);
-			long timestamp = Util.TCPGetTime(packetData);
-			int length = Util.TCPGetLen(packetData);
-			boolean S = Util.TCPGetSYN(packetData);
-			boolean F = Util.TCPGetFIN(packetData);
-			boolean A = Util.TCPGetACK(packetData);
-			short checksum = Util.TCPGetChecksum(packetData);
-			byte[] payload = Util.TCPGetData(packetData);
-
-			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
-		}
 	}
 
 

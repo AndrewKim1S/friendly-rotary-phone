@@ -22,7 +22,6 @@ public class Receiver {
 	int remote_port;
 
 	DatagramSocket socket;
-
 	FileOutputStream writer;
 
 	public static final int TCP_PACKET_LEN = 24;
@@ -115,23 +114,44 @@ public class Receiver {
 
 			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
 
-			// verify checksum
-
 			// FIN flag is set then start teardown of TCP
 			if(F) { 
 				tcpTeardownReceiver(seq); 
 				return;
 			} 
 
+			// verify checksum
+			short recalc_check = Util.checksum(payload);
+			if(recalc_check != checksum) { continue; }
+
 			// Send ack
-			sendAck(seq, ack_num);
+			sendAck(this.seq_num, seq + length);
 			
 			// write the data to the output file
 			writeToFile(payload);
 		}
 	}
 
+
+	// send Ack 
+	private void sendAck(int seq, int ack_num) {
+		byte[] TCP_packet = new byte[TCP_PACKET_LEN];
+		int length = 0;
+		length = length << 2;
+		length = (length << 1) | 1;
+		long time = System.nanoTime();
+		ByteBuffer.wrap(TCP_packet).putInt(0, seq_num);            // seq num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putInt(4, ack_num);            // ack num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putLong(8, time);              // timestamp (8 bytes)
+		ByteBuffer.wrap(TCP_packet).putInt(16, length);            // length of data is 0
+		try{
+			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length, remote_ip, remote_port);
+			socket.send(UDP_packet);
+			Util.outputSegmentInfo(true, time, false, false, true, false, seq_num, 0, ack_num);
+		} catch (Exception e) { e.printStackTrace(); }
+	}
 	
+
 	// tcp teardown for receiver
 	private void tcpTeardownReceiver(int seq) {
 		// send fin ack
@@ -162,24 +182,6 @@ public class Receiver {
 			Util.TCPGetLen(packetData), Util.TCPGetAckNum(packetData));
 	}
 
-
-	// send Ack 
-	private void sendAck(int seq, int ack_num) {
-		byte[] TCP_packet = new byte[TCP_PACKET_LEN];
-		int length = 0;
-		length = length << 2;
-		length = (length << 1) | 1;
-		long time = System.nanoTime();
-		ByteBuffer.wrap(TCP_packet).putInt(0, seq_num);            // seq num (4 bytes)
-		ByteBuffer.wrap(TCP_packet).putInt(4, ack_num);            // ack num (4 bytes)
-		ByteBuffer.wrap(TCP_packet).putLong(8, time);              // timestamp (8 bytes)
-		ByteBuffer.wrap(TCP_packet).putInt(16, length);            // length of data is 0
-		try{
-			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length, remote_ip, remote_port);
-			socket.send(UDP_packet);
-			Util.outputSegmentInfo(true, time, false, false, true, false, seq_num, 0, ack_num);
-		} catch (Exception e) { e.printStackTrace(); }
-	}
 
 
 	// Write data to output file
