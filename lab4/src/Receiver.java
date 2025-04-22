@@ -2,10 +2,8 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
-//import java.nio.file.Files;
-//import java.nio.file.Paths;
-//import java.nio.charset.StandardCharsets;
 import java.io.FileOutputStream;
+import java.util.HashMap;
 
 
 public class Receiver {
@@ -21,6 +19,10 @@ public class Receiver {
 	InetAddress remote_ip;
 	int remote_port;
 
+	int start_window;
+	int next_expected_seq;
+	HashMap<Integer, byte[]> outOfOrderSeg = new HashMap<>();
+
 	DatagramSocket socket;
 	FileOutputStream writer;
 
@@ -35,15 +37,98 @@ public class Receiver {
 		this.receiving = true;
 		this.seq_num = 0;
 
+		this.start_window = 1;
+		this.next_expected_seq = 1;
+
 		try {
-			socket = new DatagramSocket(port);
-			writer = new FileOutputStream(filename);
+			this.socket = new DatagramSocket(port);
+			this.writer = new FileOutputStream(filename);
 		} catch(Exception e) { e.printStackTrace(); }
 
 		tcpHandshakeReceiver();
 		receiveSegment();
 	}
 
+	
+	// Receive Segment
+	private void receiveSegment() {
+		while(true) {
+			byte[] data = new byte[TCP_PACKET_LEN + mtu];
+			DatagramPacket packet = new DatagramPacket(data, data.length);
+			try {	socket.receive(packet); } 
+			catch (Exception e) { e.printStackTrace(); }
+
+			// parse packet
+			byte[] packetData = packet.getData();
+			int seq = Util.TCPGetSeqNum(packetData);
+			int ack_num = Util.TCPGetAckNum(packetData);
+			long timestamp = Util.TCPGetTime(packetData);
+			int length = Util.TCPGetLen(packetData);
+			boolean S = Util.TCPGetSYN(packetData);
+			boolean F = Util.TCPGetFIN(packetData);
+			boolean A = Util.TCPGetACK(packetData);
+			short checksum = Util.TCPGetChecksum(packetData);
+			byte[] payload = Util.TCPGetData(packetData);
+
+			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
+
+			// FIN flag is set then start teardown of TCP
+			if(F) { 
+				tcpTeardownReceiver(seq); 
+				return;
+			} 
+
+			// verify checksum
+			short recalc_check = Util.checksum(payload);
+			if(recalc_check != checksum) { continue; }
+
+			// Manage sliding window
+			// Packet arrives in order
+			if(seq == this.next_expected_seq) {
+				this.start_window ++;
+				this.next_expected_seq += length;
+				// Send ack
+				sendAck(this.seq_num, this.next_expected_seq);
+				// write the data to the output file
+				writeToFile(payload);
+
+				// If window can plug holes with packets that are in buffer 
+				while(outOfOrderSeg.containsKey(next_expected_seq)) {
+					byte[] payload_outOfOrder = outOfOrderSeg.get(this.next_expected_seq);
+					writeToFile(outOfOrderSeg.get(this.next_expected_seq));
+					outOfOrderSeg.remove(this.next_expected_seq);
+
+					this.next_expected_seq += payload_outOfOrder.length;
+				}
+			} 
+			// Packet is not expected but within window
+			else if(seq > this.next_expected_seq && seq < this.next_expected_seq + (this.mtu * this.sws)) {
+				outOfOrderSeg.put(seq, payload);
+				sendAck(this.seq_num, this.next_expected_seq); 
+			}
+			// Otherwise we drop the packet
+		}
+	}
+
+
+	// send Ack 
+	private void sendAck(int seq, int ack_num) {
+		byte[] TCP_packet = new byte[TCP_PACKET_LEN];
+		int length = 0;
+		length = length << 2;
+		length = (length << 1) | 1;
+		long time = System.nanoTime();
+		ByteBuffer.wrap(TCP_packet).putInt(0, seq_num);            // seq num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putInt(4, ack_num);            // ack num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putLong(8, time);              // timestamp (8 bytes)
+		ByteBuffer.wrap(TCP_packet).putInt(16, length);            // length of data is 0
+		try{
+			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length, remote_ip, remote_port);
+			socket.send(UDP_packet);
+			Util.outputSegmentInfo(true, time, false, false, true, false, seq_num, 0, ack_num);
+		} catch (Exception e) { e.printStackTrace(); }
+	}
+	
 
 	// Receiver's tcp handshake
 	private void tcpHandshakeReceiver() {
@@ -91,66 +176,7 @@ public class Receiver {
 		} catch (Exception e) { e.printStackTrace(); }
 	}
 
-	
-	// Receive Segment
-	private void receiveSegment() {
-		while(true) {
-			byte[] data = new byte[TCP_PACKET_LEN + mtu];
-			DatagramPacket packet = new DatagramPacket(data, data.length);
-			try {	socket.receive(packet); } 
-			catch (Exception e) { e.printStackTrace(); }
 
-			// parse packet
-			byte[] packetData = packet.getData();
-			int seq = Util.TCPGetSeqNum(packetData);
-			int ack_num = Util.TCPGetAckNum(packetData);
-			long timestamp = Util.TCPGetTime(packetData);
-			int length = Util.TCPGetLen(packetData);
-			boolean S = Util.TCPGetSYN(packetData);
-			boolean F = Util.TCPGetFIN(packetData);
-			boolean A = Util.TCPGetACK(packetData);
-			short checksum = Util.TCPGetChecksum(packetData);
-			byte[] payload = Util.TCPGetData(packetData);
-
-			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
-
-			// FIN flag is set then start teardown of TCP
-			if(F) { 
-				tcpTeardownReceiver(seq); 
-				return;
-			} 
-
-			// verify checksum
-			short recalc_check = Util.checksum(payload);
-			if(recalc_check != checksum) { continue; }
-
-			// Send ack
-			sendAck(this.seq_num, seq + length);
-			
-			// write the data to the output file
-			writeToFile(payload);
-		}
-	}
-
-
-	// send Ack 
-	private void sendAck(int seq, int ack_num) {
-		byte[] TCP_packet = new byte[TCP_PACKET_LEN];
-		int length = 0;
-		length = length << 2;
-		length = (length << 1) | 1;
-		long time = System.nanoTime();
-		ByteBuffer.wrap(TCP_packet).putInt(0, seq_num);            // seq num (4 bytes)
-		ByteBuffer.wrap(TCP_packet).putInt(4, ack_num);            // ack num (4 bytes)
-		ByteBuffer.wrap(TCP_packet).putLong(8, time);              // timestamp (8 bytes)
-		ByteBuffer.wrap(TCP_packet).putInt(16, length);            // length of data is 0
-		try{
-			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length, remote_ip, remote_port);
-			socket.send(UDP_packet);
-			Util.outputSegmentInfo(true, time, false, false, true, false, seq_num, 0, ack_num);
-		} catch (Exception e) { e.printStackTrace(); }
-	}
-	
 
 	// tcp teardown for receiver
 	private void tcpTeardownReceiver(int seq) {

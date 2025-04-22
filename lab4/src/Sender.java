@@ -8,7 +8,8 @@ import java.net.InetAddress;
 import java.net.DatagramSocket;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.ConcurrentHashMap;
+//import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 
 
 public class Sender {
@@ -28,8 +29,6 @@ public class Sender {
 	AtomicInteger seg_send_ind;
 	// Map next sequence num from Receiver to segment number
 	ConcurrentHashMap<Integer, Integer> seq_seg = new ConcurrentHashMap<>();
-	// Map sequence num to bool - ie if it is in the map then it was acked out of order
-	HashMap<Integer, Boolean> outOfOrderAck = new HashMap<>();
 
 	FileInputStream fis; // will read input file per byte 
 	File file;
@@ -37,6 +36,11 @@ public class Sender {
 	DatagramSocket socket;
 
 	AtomicBoolean teardownStarted;
+
+	ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+
+	// TODO implement
+	long timeout;
 
 	public static final int MAX_RETRANSMISSIONS = 16;
 	public static final int TCP_PACKET_LEN = 24;
@@ -55,6 +59,8 @@ public class Sender {
 		this.seg_send_ind = new AtomicInteger(1);
 
 		this.teardownStarted = new AtomicBoolean(false);
+		this.timeout = 10000;
+
 
 		try {
 			this.remote_ip = InetAddress.getByName(remote_ip);
@@ -90,13 +96,23 @@ public class Sender {
 			// Once window has space to send more
 
 			byte[] data = getData();          // get segment (parse from input file)
-			byte[] tcp = createGenTCP(data);  // create tcp packet
+			byte[] tcp = createGenTCP(data, seq_num);  // create tcp packet
 			// create udp (datagram packet)
 			try{
 				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, remote_ip, remote_port);
 				socket.send(UDP_packet);
 			} catch (Exception e) { e.printStackTrace(); }
-			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, seq_num, data.length, 0);
+			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, seq_num, data.length, 1);
+
+			// TODO fix
+			// Add to scheduler for retransmission
+			/*scheduler.schedule(() -> {
+				byte[] retransmit_tcp = createGenTCP(data, Util.TCPGetSeqNum(tcp));
+				try {
+					DatagramPacket UDP_packet2 = new DatagramPacket(retransmit_tcp, retransmit_tcp.length, remote_ip, remote_port);
+					this.socket.send(UDP_packet2);
+				} catch (Exception e) { e.printStackTrace(); }
+			}, this.timeout, TimeUnit.MILLISECONDS); */
 
 			// Map seq_num of packet to seg_num
 			seq_seg.put(seq_num + data.length, seg_send_ind.get());
@@ -104,6 +120,8 @@ public class Sender {
 			seq_num += data.length;
 			seg_send_ind.incrementAndGet();
 		}
+
+		// TODO make sure everything has been received before teardown
 
 		// Send Fin contingent on sliding window algorithm
 		teardownStarted.set(true);
@@ -131,7 +149,6 @@ public class Sender {
 			short checksum = Util.TCPGetChecksum(packetData);
 			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
 
-			// increment start_window if packet received is start_window th segment acked
 			int seg_num = 0; // the seq_num the receiver is acknowledging
 			if(seq_seg.containsKey(ack_num)) {
 				seg_num = seq_seg.get(ack_num);
@@ -142,21 +159,13 @@ public class Sender {
 			if(seg_num == this.start_window.get()) {
 				this.start_window.incrementAndGet();
 				seq_seg.remove(ack_num);
-
-				// Increment start window as much as possible to remove holes
-				while(outOfOrderAck.get(this.start_window.get()) != null) {
-					outOfOrderAck.remove(this.start_window);
-					this.start_window.incrementAndGet();
-					seq_seg.remove(ack_num);
-				}
 			}
 			// handle out of order acks
-			else {
-				// check that the segment number is within the window other wise drop
-				if(seg_num > this.start_window.get() && seg_num <= this.start_window.get() + sws) {
-					outOfOrderAck.put(seg_num, true);
-				}
+			else if(seg_num > this.start_window.get()) {
+				this.start_window.set(seg_num);
+				// TODO Remove all seq_seg entries < seg_num 
 			}
+			// TODO Handle 3 duplicate acks then retransmit
 		}
 	}
 
@@ -299,12 +308,12 @@ public class Sender {
 
 
 	// Create generic TCP byte[] with data
-	private byte[] createGenTCP(byte[] data) {
+	private byte[] createGenTCP(byte[] data, int seq) {
 		int data_length = data.length;
 		
 		byte[] TCP_packet = new byte[data.length + TCP_PACKET_LEN];
-		ByteBuffer.wrap(TCP_packet).putInt(0, seq_num);            // seq num (4 bytes)
-		ByteBuffer.wrap(TCP_packet).putInt(4, 0);                  // ack num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putInt(0, seq);            // seq num (4 bytes)
+		ByteBuffer.wrap(TCP_packet).putInt(4, 1);                  // ack num (4 bytes)
 		ByteBuffer.wrap(TCP_packet).putLong(8, System.nanoTime()); // timestamp (8 bytes)
 
 		data_length = (data_length << 3);
