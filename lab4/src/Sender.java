@@ -144,19 +144,19 @@ public class Sender {
 				seq_seg.remove(ack_num);
 
 				// Increment start window as much as possible to remove holes
-				/*while(outOfOrderAck.get(this.start_window.get())) {
+				while(outOfOrderAck.get(this.start_window.get()) != null) {
 					outOfOrderAck.remove(this.start_window);
 					this.start_window.incrementAndGet();
 					seq_seg.remove(ack_num);
-				}*/
+				}
 			}
 			// handle out of order acks
-			/*else {
+			else {
 				// check that the segment number is within the window other wise drop
 				if(seg_num > this.start_window.get() && seg_num <= this.start_window.get() + sws) {
 					outOfOrderAck.put(seg_num, true);
 				}
-			}*/
+			}
 		}
 	}
 
