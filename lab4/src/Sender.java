@@ -30,6 +30,9 @@ public class Sender {
 	// Map next sequence num from Receiver to segment number
 	ConcurrentHashMap<Integer, Integer> seq_seg = new ConcurrentHashMap<>();
 
+	// Timeout segment to task hash map
+	ConcurrentHashMap<Integer, ScheduledFuture<?>> seg_task = new ConcurrentHashMap<>();
+
 	FileInputStream fis; // will read input file per byte 
 	File file;
 
@@ -37,10 +40,10 @@ public class Sender {
 
 	AtomicBoolean teardownStarted;
 
-	ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-
 	// TODO implement
-	long timeout;
+	long timeout;  // nano
+	long ERTT;
+	long EDEV;
 
 	public static final int MAX_RETRANSMISSIONS = 16;
 	public static final int TCP_PACKET_LEN = 24;
@@ -59,8 +62,8 @@ public class Sender {
 		this.seg_send_ind = new AtomicInteger(1);
 
 		this.teardownStarted = new AtomicBoolean(false);
-		this.timeout = 10000;
 
+		this.timeout = 5;
 
 		try {
 			this.remote_ip = InetAddress.getByName(remote_ip);
@@ -90,35 +93,29 @@ public class Sender {
 	// Send Segments
 	private void sendSegment() {
 		// As long as there is still info to be sent, continue sending
-		while(file_pos < file.length()) {
+		while(this.file_pos < this.file.length()) {
 			// Sender waits 
-			while(seg_send_ind.get() >= start_window.get() + sws) {}
+			while(this.seg_send_ind.get() >= this.start_window.get() + this.sws) {}
 			// Once window has space to send more
 
 			byte[] data = getData();          // get segment (parse from input file)
-			byte[] tcp = createGenTCP(data, seq_num);  // create tcp packet
+			byte[] tcp = createGenTCP(data, this.seq_num);  // create tcp packet
 			// create udp (datagram packet)
 			try{
-				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, remote_ip, remote_port);
+				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, this.remote_ip, this.remote_port);
 				socket.send(UDP_packet);
 			} catch (Exception e) { e.printStackTrace(); }
-			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, seq_num, data.length, 1);
+			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, this.seq_num, data.length, 1);
 
 			// TODO fix
 			// Add to scheduler for retransmission
-			/*scheduler.schedule(() -> {
-				byte[] retransmit_tcp = createGenTCP(data, Util.TCPGetSeqNum(tcp));
-				try {
-					DatagramPacket UDP_packet2 = new DatagramPacket(retransmit_tcp, retransmit_tcp.length, remote_ip, remote_port);
-					this.socket.send(UDP_packet2);
-				} catch (Exception e) { e.printStackTrace(); }
-			}, this.timeout, TimeUnit.MILLISECONDS); */
+			// setRetransmission(this.seq_num, data);
 
 			// Map seq_num of packet to seg_num
-			seq_seg.put(seq_num + data.length, seg_send_ind.get());
+			this.seq_seg.put(this.seq_num + data.length, this.seg_send_ind.get());
 			// increment to the next sequence number and segment number
-			seq_num += data.length;
-			seg_send_ind.incrementAndGet();
+			this.seq_num += data.length;
+			this.seg_send_ind.incrementAndGet();
 		}
 
 		// TODO make sure everything has been received before teardown
@@ -126,6 +123,19 @@ public class Sender {
 		// Send Fin contingent on sliding window algorithm
 		teardownStarted.set(true);
 		tcpTeardownSender();
+	}
+
+
+	// Create retransmission task for scheduler
+	private void setRetransmission(int seq, byte[] data) {
+		byte[] retransmit_tcp = createGenTCP(data, seq);
+		// task for scheduler to execute 
+		Runnable task = () -> {
+			try {
+				DatagramPacket UDP_packet = new DatagramPacket(retransmit_tcp, retransmit_tcp.length, this.remote_ip, this.remote_port);
+				this.socket.send(UDP_packet);
+			} catch (Exception e) { e.printStackTrace(); }
+		};
 	}
 
 
@@ -147,6 +157,14 @@ public class Sender {
 			boolean F = Util.TCPGetFIN(packetData);
 			boolean A = Util.TCPGetACK(packetData);
 			short checksum = Util.TCPGetChecksum(packetData);
+
+			// calculate timeout
+			long SRTT = System.nanoTime() - timestamp;
+			this.ERTT = (long)(0.875 * this.ERTT) + (long)((1-0.875) * SRTT);
+			this.EDEV = (long)(0.75 * this.EDEV) + (long)((1 - 0.75) * Math.abs(SRTT - this.ERTT));
+			this.timeout = this.ERTT + 4 * this.EDEV;
+			// System.out.println("\nTIMEOUT: " + this.timeout + "\n");
+
 			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
 
 			int seg_num = 0; // the seq_num the receiver is acknowledging
@@ -197,6 +215,13 @@ public class Sender {
 				DatagramPacket packet = new DatagramPacket(data, data.length);
 				socket.receive(packet);
 				byte[] packet_data = packet.getData();
+
+				// Calculate timeout
+				this.ERTT = (System.nanoTime() - Util.TCPGetTime(packet_data));
+				this.EDEV = 0;
+				this.timeout = 2 * this.ERTT;
+				// System.out.println("\nTIMEOUT: " + this.timeout + "\n");
+
 				Util.outputSegmentInfo(false, Util.TCPGetTime(packet_data), 
 					Util.TCPGetSYN(packet_data), Util.TCPGetFIN(packet_data), Util.TCPGetACK(packet_data),
 					false, Util.TCPGetSeqNum(packet_data), 0, Util.TCPGetAckNum(packet_data));
