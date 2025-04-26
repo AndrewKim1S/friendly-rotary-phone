@@ -37,10 +37,36 @@ public class Sender {
 
 	AtomicBoolean teardownStarted;
 
-	// TODO implement
 	long timeout;  // nano
 	long ERTT;
 	long EDEV;
+
+	// Retransmission variables
+	public class RetransmitTask {
+		public final long scheduledTime;
+		public int numberOfRetransmissions;
+		public int seq_num_retransmit;
+		public int seg_num_retransmit;
+		private byte[] data;
+
+		public RetransmitTask(long scheduledTime, int seq_num_retransmit, int seg_num_retransmit, byte[] data) {
+			this.scheduledTime = scheduledTime;
+			this.numberOfRetransmissions = 0;
+			this.seq_num_retransmit = seq_num_retransmit;
+			this.seg_num_retransmit = seg_num_retransmit;
+			this.data = data;
+		}
+
+		public void run() {
+			byte[] tcp = createGenTCP(data, this.seq_num_retransmit);  // create tcp packet
+			try{
+				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, remote_ip, remote_port);
+				socket.send(UDP_packet);
+			} catch (Exception e) { e.printStackTrace(); }
+			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, this.seq_num_retransmit, data.length, 1);
+		}
+	}
+	ConcurrentSkipListSet<RetransmitTask> toRetransmitSet = new ConcurrentSkipListSet<RetransmitTask>();
 
 	public static final int MAX_RETRANSMISSIONS = 16;
 	public static final int TCP_PACKET_LEN = 24;
@@ -78,11 +104,14 @@ public class Sender {
 		// Create threads
 		Thread threadSend = new Thread(() -> sendSegment());
 		Thread threadRec = new Thread(() -> recAck());
+		// Thread threadRetransmit = new Thread(() -> );
+
 		threadSend.start();
 		threadRec.start();
 		try {
 			threadSend.join();
 			threadRec.join();
+			// threadRetransmit.join();
 		} catch (Exception e) {	e.printStackTrace(); }
 
 		System.out.println("\nALL INFORMATION EXCHANGED\n");
@@ -100,38 +129,35 @@ public class Sender {
 
 			byte[] data = getData();          // get segment (parse from input file)
 			byte[] tcp = createGenTCP(data, this.seq_num);  // create tcp packet
-			// create udp (datagram packet)
-			try{
-				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, this.remote_ip, this.remote_port);
-				socket.send(UDP_packet);
-			} catch (Exception e) { e.printStackTrace(); }
-			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, this.seq_num, data.length, 1);
-
+																											//
 			// TODO fix
-			// Add to scheduler for retransmission
-			// setRetransmission(this.seq_num, data);
+			setRetransmission(this.seq_num, this.seg_send_ind.get(), data);
 
 			// Map seq_num of packet to seg_num
 			this.seq_seg.put(this.seq_num + data.length, this.seg_send_ind.get());
 			// increment to the next sequence number and segment number
 			this.seq_num += data.length;
 			this.seg_send_ind.incrementAndGet();
+	
+			// create udp (datagram packet) and send
+			try{
+				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, this.remote_ip, this.remote_port);
+				socket.send(UDP_packet);
+			} catch (Exception e) { e.printStackTrace(); }
+			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, this.seq_num, data.length, 1);
+
+
 		}
 		teardownStarted.set(true);
-		System.out.println("\nSender sen thread done!\n");
+		System.out.println("\nSENDER SEN THREAD DONE!\n");
 	}
 
 
 	// Create retransmission task for scheduler
-	private void setRetransmission(int seq, byte[] data) {
-		byte[] retransmit_tcp = createGenTCP(data, seq);
-		// task for scheduler to execute 
-		Runnable task = () -> {
-			try {
-				DatagramPacket UDP_packet = new DatagramPacket(retransmit_tcp, retransmit_tcp.length, this.remote_ip, this.remote_port);
-				this.socket.send(UDP_packet);
-			} catch (Exception e) { e.printStackTrace(); }
-		};
+	private void setRetransmission(int seq, int seg, byte[] data) {
+		// TODO convert timeout and nanotime units
+		RetransmitTask t = new RetransmitTask(System.nanoTime() + this.timeout, seq, seg, data);
+
 	}
 
 
@@ -312,6 +338,12 @@ public class Sender {
 				return;
 			}
 		}
+	}
+
+
+	// Retransmission thread function
+	private void retransmitFunction() {
+
 	}
 
 
