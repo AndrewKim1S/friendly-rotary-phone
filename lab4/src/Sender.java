@@ -30,9 +30,6 @@ public class Sender {
 	// Map next sequence num from Receiver to segment number
 	ConcurrentHashMap<Integer, Integer> seq_seg = new ConcurrentHashMap<>();
 
-	// Timeout segment to task hash map
-	ConcurrentHashMap<Integer, ScheduledFuture<?>> seg_task = new ConcurrentHashMap<>();
-
 	FileInputStream fis; // will read input file per byte 
 	File file;
 
@@ -73,6 +70,7 @@ public class Sender {
 			fis = new FileInputStream(this.filename);
 			file = new File(this.filename);
 			socket = new DatagramSocket(port);
+			socket.setSoTimeout(5000);
 		} catch (Exception e) { e.printStackTrace(); }
 
 		tcpHandshakeSender();
@@ -87,6 +85,8 @@ public class Sender {
 			threadRec.join();
 		} catch (Exception e) {	e.printStackTrace(); }
 
+		System.out.println("\nALL INFORMATION EXCHANGED\n");
+		tcpTeardownSender();
 	}
 
 
@@ -95,7 +95,7 @@ public class Sender {
 		// As long as there is still info to be sent, continue sending
 		while(this.file_pos < this.file.length()) {
 			// Sender waits 
-			while(this.seg_send_ind.get() >= this.start_window.get() + this.sws) {}
+			while(this.seg_send_ind.get() >= this.start_window.get() + this.sws) {  }
 			// Once window has space to send more
 
 			byte[] data = getData();          // get segment (parse from input file)
@@ -117,12 +117,8 @@ public class Sender {
 			this.seq_num += data.length;
 			this.seg_send_ind.incrementAndGet();
 		}
-
-		// TODO make sure everything has been received before teardown
-
-		// Send Fin contingent on sliding window algorithm
 		teardownStarted.set(true);
-		tcpTeardownSender();
+		System.out.println("\nSender sen thread done!\n");
 	}
 
 
@@ -141,11 +137,18 @@ public class Sender {
 
 	// Receive acks from the receiver
 	private void recAck() {
-		while(!teardownStarted.get()) {
-			byte[] data = new byte[TCP_PACKET_LEN + mtu];
-			DatagramPacket packet = new DatagramPacket(data, data.length);
+		boolean all_received = false;
+		byte[] data = new byte[TCP_PACKET_LEN + mtu];
+		DatagramPacket packet = new DatagramPacket(data, data.length);
+		while(!all_received) { // sender has sent everything 
 			try {	socket.receive(packet); } 
-			catch (Exception e) { e.printStackTrace(); }
+			catch (Exception e) { 
+				/*System.out.println("\nteardown Started: " + teardownStarted.get());
+				System.out.println("seg_send_ind: " + this.seg_send_ind.get());
+				System.out.println("start_window: " + this.start_window.get());*/
+				if(teardownStarted.get() && this.start_window.get() == this.seg_send_ind.get()) { all_received = true; }
+				continue;
+			}
 
 			// parse packet
 			byte[] packetData = packet.getData();
@@ -167,10 +170,11 @@ public class Sender {
 
 			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
 
+			// TODO keep track of same acknowledgements - they cause errors
 			int seg_num = 0; // the seq_num the receiver is acknowledging
 			if(seq_seg.containsKey(ack_num)) {
 				seg_num = seq_seg.get(ack_num);
-			} else {
+			} else { // This means that we received multiple acks
 				System.out.println("\nERROR: ack_num: " + ack_num + "\n");
 			}
 
@@ -184,7 +188,11 @@ public class Sender {
 				// TODO Remove all seq_seg entries < seg_num 
 			}
 			// TODO Handle 3 duplicate acks then retransmit
+
+			if(teardownStarted.get() && this.start_window.get() == this.seg_send_ind.get()) { all_received = true; }
 		}
+		
+		System.out.println("\nSender rec thread done!\n");
 	}
 
 
@@ -304,10 +312,6 @@ public class Sender {
 				return;
 			}
 		}
-
-		//Util.outputSegmentInfo(false, Util.TCPGetTime(packetData), Util.TCPGetSYN(packetData), 
-		//	Util.TCPGetFIN(packetData), Util.TCPGetACK(packetData), false, Util.TCPGetSeqNum(packetData),
-		//	0, Util.TCPGetAckNum(packetData));
 	}
 
 
