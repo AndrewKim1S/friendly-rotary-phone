@@ -135,9 +135,7 @@ public class Sender {
 
 			// Map seq_num of packet to seg_num
 			this.seq_seg.put(this.seq_num + data.length, this.seg_send_ind.get());
-			// increment to the next sequence number and segment number
-			this.seq_num += data.length;
-			this.seg_send_ind.incrementAndGet();
+			
 	
 			// create udp (datagram packet) and send
 			try{
@@ -146,7 +144,9 @@ public class Sender {
 			} catch (Exception e) { e.printStackTrace(); }
 			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, this.seq_num, data.length, 1);
 
-
+			// increment to the next sequence number and segment number
+			this.seq_num += data.length;
+			this.seg_send_ind.incrementAndGet();
 		}
 		teardownStarted.set(true);
 		System.out.println("\nSENDER SEN THREAD DONE!\n");
