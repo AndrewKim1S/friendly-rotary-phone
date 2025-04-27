@@ -8,8 +8,9 @@ import java.net.InetAddress;
 import java.net.DatagramSocket;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-//import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.*;
+import java.util.Comparator;
+import java.util.Iterator;
 
 
 public class Sender {
@@ -43,7 +44,7 @@ public class Sender {
 
 	// Retransmission variables
 	public class RetransmitTask {
-		public final long scheduledTime;
+		public long scheduledTime;
 		public int numberOfRetransmissions;
 		public int seq_num_retransmit;
 		public int seg_num_retransmit;
@@ -66,7 +67,10 @@ public class Sender {
 			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, this.seq_num_retransmit, data.length, 1);
 		}
 	}
-	ConcurrentSkipListSet<RetransmitTask> toRetransmitSet = new ConcurrentSkipListSet<RetransmitTask>();
+	// used by threadsend and threadretran
+	ConcurrentSkipListSet<RetransmitTask> toRetransmitSet = new ConcurrentSkipListSet<RetransmitTask>(
+		Comparator.comparingLong(t -> t.scheduledTime)
+	);
 
 	public static final int MAX_RETRANSMISSIONS = 16;
 	public static final int TCP_PACKET_LEN = 24;
@@ -104,14 +108,15 @@ public class Sender {
 		// Create threads
 		Thread threadSend = new Thread(() -> sendSegment());
 		Thread threadRec = new Thread(() -> recAck());
-		// Thread threadRetransmit = new Thread(() -> );
+		Thread threadRetransmit = new Thread(() -> retransmitFunction());
 
+		threadRetransmit.start();
 		threadSend.start();
 		threadRec.start();
 		try {
 			threadSend.join();
 			threadRec.join();
-			// threadRetransmit.join();
+			threadRetransmit.join();
 		} catch (Exception e) {	e.printStackTrace(); }
 
 		System.out.println("\nALL INFORMATION EXCHANGED\n");
@@ -131,7 +136,8 @@ public class Sender {
 			byte[] tcp = createGenTCP(data, this.seq_num);  // create tcp packet
 																											//
 			// TODO fix
-			setRetransmission(this.seq_num, this.seg_send_ind.get(), data);
+			// setRetransmission(this.seq_num, this.seg_send_ind.get(), data);
+			toRetransmitSet.add(new RetransmitTask(System.nanoTime() + this.timeout, this.seq_num, this.seg_send_ind.get(), data));
 
 			// Map seq_num of packet to seg_num
 			this.seq_seg.put(this.seq_num + data.length, this.seg_send_ind.get());
@@ -154,11 +160,11 @@ public class Sender {
 
 
 	// Create retransmission task for scheduler
-	private void setRetransmission(int seq, int seg, byte[] data) {
+	/*private void setRetransmission(int seq, int seg, byte[] data) {
 		// TODO convert timeout and nanotime units
-		RetransmitTask t = new RetransmitTask(System.nanoTime() + this.timeout, seq, seg, data);
-
-	}
+		// Insert the RetransmitTask to ConcurrentSkipListSet
+		toRetransmitSet.add(new RetransmitTask(System.nanoTime() + this.timeout, seq, seg, data));
+	}*/
 
 
 	// Receive acks from the receiver
@@ -200,22 +206,45 @@ public class Sender {
 			int seg_num = 0; // the seq_num the receiver is acknowledging
 			if(seq_seg.containsKey(ack_num)) {
 				seg_num = seq_seg.get(ack_num);
-			} else { // This means that we received multiple acks
-				System.out.println("\nERROR: ack_num: " + ack_num + "\n");
+			} 
+			// This means that we received multiple acks or seq_seg does not contain ack_num
+			else {
+				//System.out.println("\n" + ack_num + "\n");
 			}
 
+			// Handle in order ACKs
 			if(seg_num == this.start_window.get()) {
 				this.start_window.incrementAndGet();
 				seq_seg.remove(ack_num);
+				// Cancel retransmission tasks
+				Iterator<RetransmitTask> it = toRetransmitSet.iterator();
+				while(it.hasNext()) {
+					RetransmitTask t = it.next();
+					if(t.seg_num_retransmit <= seg_num) {
+						it.remove();
+					}
+				}
 			}
-			// handle out of order acks
+			
+			// Handle out of order Acks
 			else if(seg_num > this.start_window.get()) {
+				System.out.println("------OUT OF ORDER ACK RECEIVED!---------");
 				this.start_window.set(seg_num);
-				// TODO Remove all seq_seg entries < seg_num 
+				// TODO Remove all seq_seg entries < seg_num (NOT IMPORTANT)
+				// Cancel retransmission tasks
+				Iterator<RetransmitTask> it = toRetransmitSet.iterator();
+				while(it.hasNext()) {
+					RetransmitTask t = it.next();
+					if(t.seg_num_retransmit <= seg_num) {
+						it.remove();
+					}
+				}
 			}
+
 			// TODO Handle 3 duplicate acks then retransmit
 
 			if(teardownStarted.get() && this.start_window.get() == this.seg_send_ind.get()) { all_received = true; }
+			System.out.println("start window = " + this.start_window.get());
 		}
 		
 		System.out.println("\nSender rec thread done!\n");
@@ -343,7 +372,26 @@ public class Sender {
 
 	// Retransmission thread function
 	private void retransmitFunction() {
+		// Get the next task to retransmit from toRetransmitSet 
+		while(!teardownStarted.get() || !toRetransmitSet.isEmpty()) {
+			if(toRetransmitSet.isEmpty()) { continue; }
+			RetransmitTask t = toRetransmitSet.pollFirst();
+			long currTime = System.nanoTime();
+			System.out.println("Sanity check for retransmit thread");
 
+			if(t.scheduledTime <= currTime) {
+				System.out.println("\nRETRANSMISSION " + "scheduledTime: " + t.scheduledTime + " currTime: " + currTime);
+				t.run();
+				t.numberOfRetransmissions++;
+
+				// After retransmission, reschedule the scheduledTime
+				t.scheduledTime += this.timeout;
+				toRetransmitSet.add(t);
+
+				// TODO tell the Sender rec thread to forget about it if max number of retransmissions
+			}
+		}
+		System.out.println("RETRANSMISSION THREAD COMPLETE!");
 	}
 
 
