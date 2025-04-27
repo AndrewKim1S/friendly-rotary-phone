@@ -106,7 +106,9 @@ public class Receiver {
 				outOfOrderSeg.put(seq, payload);
 				sendAck(this.seq_num, this.next_expected_seq); 
 			}
-			// Otherwise we drop the packet
+			else {
+				sendAck(this.seq_num, this.next_expected_seq);
+			}
 		}
 	}
 

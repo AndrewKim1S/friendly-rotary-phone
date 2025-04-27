@@ -44,7 +44,7 @@ public final class Util {
 		String output = "";
 		if(send) { output += "snd "; }
 		else { output += "rcv "; }
-		output += time + " ";
+		output += String.format("%.3f", (time/1_000_000.0)) + " "; // print in millisecond format cause 
 		if(S) { output += "S "; }
 		else { output += "- "; }
 		if(A) { output += "A "; }

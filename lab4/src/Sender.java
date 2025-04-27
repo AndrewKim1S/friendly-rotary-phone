@@ -228,8 +228,8 @@ public class Sender {
 			
 			// Handle out of order Acks
 			else if(seg_num > this.start_window.get()) {
-				System.out.println("------OUT OF ORDER ACK RECEIVED!---------");
-				this.start_window.set(seg_num);
+				// System.out.println("------OUT OF ORDER ACK RECEIVED!---------");
+				this.start_window.set(seg_num+1);
 				// TODO Remove all seq_seg entries < seg_num (NOT IMPORTANT)
 				// Cancel retransmission tasks
 				Iterator<RetransmitTask> it = toRetransmitSet.iterator();
@@ -244,10 +244,11 @@ public class Sender {
 			// TODO Handle 3 duplicate acks then retransmit
 
 			if(teardownStarted.get() && this.start_window.get() == this.seg_send_ind.get()) { all_received = true; }
-			System.out.println("start window = " + this.start_window.get());
+			// System.out.println("start window = " + this.start_window.get());
 		}
-		
-		System.out.println("\nSender rec thread done!\n");
+		// Clear the buffer for retransmissions to address concurrency issues
+		toRetransmitSet.clear();
+		System.out.println("\nSENDER REC THREAD DONE!\n");
 	}
 
 
@@ -375,12 +376,17 @@ public class Sender {
 		// Get the next task to retransmit from toRetransmitSet 
 		while(!teardownStarted.get() || !toRetransmitSet.isEmpty()) {
 			if(toRetransmitSet.isEmpty()) { continue; }
+			if(teardownStarted.get() && 
+				this.start_window.get() == this.seg_send_ind.get()) { 
+				toRetransmitSet.clear(); 
+				continue;
+			}
 			RetransmitTask t = toRetransmitSet.pollFirst();
 			long currTime = System.nanoTime();
-			System.out.println("Sanity check for retransmit thread");
 
+			// System.out.println("scheduledTime: " + t.scheduledTime/1_000_000 + " currTime: " + currTime/1_000_000);
 			if(t.scheduledTime <= currTime) {
-				System.out.println("\nRETRANSMISSION " + "scheduledTime: " + t.scheduledTime + " currTime: " + currTime);
+				// System.out.println("ACTUALLY RETRANSMITTING!");
 				t.run();
 				t.numberOfRetransmissions++;
 
@@ -389,6 +395,10 @@ public class Sender {
 				toRetransmitSet.add(t);
 
 				// TODO tell the Sender rec thread to forget about it if max number of retransmissions
+			} 
+			// If we not timeout yet, don't forget to add it back into the buffer
+			else {
+				toRetransmitSet.add(t);
 			}
 		}
 		System.out.println("RETRANSMISSION THREAD COMPLETE!");
