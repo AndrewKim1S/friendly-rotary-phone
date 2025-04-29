@@ -1,5 +1,6 @@
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.SocketTimeoutException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.io.FileOutputStream;
@@ -26,6 +27,13 @@ public class Receiver {
 	DatagramSocket socket;
 	FileOutputStream writer;
 
+	int bytesReceived;
+	int packetsSent;
+	int packetsReceived;
+	int numOutOfOrderDiscarded;
+	int numChecksumDiscarded;
+
+
 	public static final int TCP_PACKET_LEN = 24;
 
 	public Receiver(int port, int mtu, int sws, String filename) {
@@ -40,6 +48,12 @@ public class Receiver {
 		this.start_window = 1;
 		this.next_expected_seq = 1;
 
+		this.bytesReceived = 0;
+		this.packetsSent = 0;
+		this.packetsReceived = 0;
+		this.numOutOfOrderDiscarded = 0;
+		this.numChecksumDiscarded = 0;
+
 		try {
 			this.socket = new DatagramSocket(port);
 			this.writer = new FileOutputStream(filename);
@@ -47,6 +61,7 @@ public class Receiver {
 
 		tcpHandshakeReceiver();
 		receiveSegment();
+		PrintMetrics();
 	}
 
 	
@@ -55,7 +70,10 @@ public class Receiver {
 		while(true) {
 			byte[] data = new byte[TCP_PACKET_LEN + mtu];
 			DatagramPacket packet = new DatagramPacket(data, data.length);
-			try {	socket.receive(packet); } 
+			try {	
+				socket.receive(packet); 
+				this.packetsReceived++;
+			} 
 			catch (Exception e) { e.printStackTrace(); }
 
 			// parse packet
@@ -80,16 +98,17 @@ public class Receiver {
 
 			// verify checksum
 			short recalc_check = Util.checksum(payload);
-			if(recalc_check != checksum) { continue; }
+			if(recalc_check != checksum) { 
+				this.numChecksumDiscarded++;
+				continue; 
+			}
 
 			// Manage sliding window
 			// Packet arrives in order
 			if(seq == this.next_expected_seq) {
 				this.start_window ++;
 				this.next_expected_seq += length;
-				// Send ack
 				sendAck(this.seq_num, this.next_expected_seq);
-				// write the data to the output file
 				writeToFile(payload);
 
 				// If window can plug holes with packets that are in buffer 
@@ -100,6 +119,7 @@ public class Receiver {
 
 					this.next_expected_seq += payload_outOfOrder.length;
 				}
+				this.bytesReceived = this.next_expected_seq-1;
 			} 
 			// Packet is not expected but within window
 			else if(seq > this.next_expected_seq && seq < this.next_expected_seq + (this.mtu * this.sws)) {
@@ -108,6 +128,7 @@ public class Receiver {
 			}
 			else {
 				sendAck(this.seq_num, this.next_expected_seq);
+				this.numOutOfOrderDiscarded++;
 			}
 		}
 	}
@@ -127,6 +148,7 @@ public class Receiver {
 		try{
 			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length, remote_ip, remote_port);
 			socket.send(UDP_packet);
+			this.packetsSent++;
 			Util.outputSegmentInfo(true, time, false, false, true, false, seq_num, 0, ack_num);
 		} catch (Exception e) { e.printStackTrace(); }
 	}
@@ -139,6 +161,7 @@ public class Receiver {
 			byte[] data = new byte[TCP_PACKET_LEN];
 			DatagramPacket packet = new DatagramPacket(data, data.length);
 			socket.receive(packet);
+			this.packetsReceived++;
 			byte[] packet_data = packet.getData();
 			Util.outputSegmentInfo(false, Util.TCPGetTime(packet_data), 
 				Util.TCPGetSYN(packet_data), Util.TCPGetFIN(packet_data), Util.TCPGetACK(packet_data),
@@ -163,18 +186,34 @@ public class Receiver {
 
 				DatagramPacket packet2 = new DatagramPacket(ack_data, ack_data.length, remote_ip, remote_port);
 				socket.send(packet2);
+				this.packetsSent++;
 				Util.outputSegmentInfo(true, Util.TCPGetTime(ack_data), true, false, true, false, this.seq_num, 0, seq_num_rec);
 				this.seq_num ++;
 
 				// Receive the last part of the 3 way handshake
 				byte[] data3 = new byte[TCP_PACKET_LEN];
 				DatagramPacket packet3 = new DatagramPacket(data, data.length);
-				socket.receive(packet3);
+				this.socket.setSoTimeout(5000);
+				// TODO need to recalculate time
+				try {
+					socket.receive(packet3);
+					this.packetsReceived++;
+				} catch (SocketTimeoutException e) { 
+					socket.send(packet2); 
+					this.packetsSent++;
+					Util.outputSegmentInfo(true, Util.TCPGetTime(ack_data), true, false, true, false, this.seq_num, 0, seq_num_rec);
+				}
+
 				byte[] packet_data3 = packet.getData();
 				Util.outputSegmentInfo(false, Util.TCPGetTime(packet_data3), 
 					Util.TCPGetSYN(packet_data3), Util.TCPGetFIN(packet_data3), Util.TCPGetACK(packet_data3),
 					false, Util.TCPGetSeqNum(packet_data3), 0, Util.TCPGetAckNum(packet_data3));
+				// This means that sender's ack was dropped and sender is sending data. Just start accepting it
+				if(!Util.TCPGetACK(packet_data3)) {
+					return;
+				}
 			}
+			this.socket.setSoTimeout(0);
 		} catch (Exception e) { e.printStackTrace(); }
 	}
 
@@ -196,20 +235,26 @@ public class Receiver {
 		try{
 			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length, remote_ip, remote_port);
 			socket.send(UDP_packet);
+			this.packetsSent++;
 			Util.outputSegmentInfo(true, time, false, true, true, false, seq_num, 0, seq + 1);
-		} catch (Exception e) { e.printStackTrace(); }
+		} catch (Exception e) {	e.printStackTrace(); }
 
 		// receive ack
 		byte[] TCP_packet2 = new byte[TCP_PACKET_LEN];
 		DatagramPacket UDP_packet2 = new DatagramPacket(TCP_packet2, TCP_packet2.length);
-		try {	socket.receive(UDP_packet2); } 
-		catch (Exception e) { e.printStackTrace(); }
+		try {	
+			socket.receive(UDP_packet2); 
+			this.packetsReceived++;
+		} 
+		catch (SocketTimeoutException e) { 
+			e.printStackTrace(); 
+			return;
+		} catch (Exception ee) { ee.printStackTrace(); }
 		byte[] packetData = UDP_packet2.getData();
 		Util.outputSegmentInfo(false, Util.TCPGetTime(packetData), Util.TCPGetSYN(packetData), 
 			Util.TCPGetFIN(packetData), Util.TCPGetACK(packetData), false, Util.TCPGetSeqNum(packetData), 
 			Util.TCPGetLen(packetData), Util.TCPGetAckNum(packetData));
 	}
-
 
 
 	// Write data to output file
@@ -219,6 +264,17 @@ public class Receiver {
 		} catch (Exception e) { e.printStackTrace(); }
 	}
 
+
+	// Print Metrics
+	private void PrintMetrics() {
+		System.out.println("\nAmount of Data Received: " + this.bytesReceived);
+		System.out.println("Number of Packets Sent: " + this.packetsSent);
+		System.out.println("Number of Packets Received: " + this.packetsReceived);
+		System.out.println("Number of Out-Of-Sequence Packets discarded: " + this.numOutOfOrderDiscarded);
+		System.out.println("Number of Packets discarded due to incorrect cheksum: " + this.numChecksumDiscarded);
+		System.out.println("Number of Retransmissions: 0");
+		System.out.println("Number of Duplicate Acks: 0");
+	}
 
 }
 

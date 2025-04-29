@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.net.DatagramPacket;
 import java.net.InetAddress;
 import java.net.DatagramSocket;
+import java.net.SocketTimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.*;
@@ -42,6 +43,13 @@ public class Sender {
 	long ERTT;
 	long EDEV;
 
+	int bytesTransferred;
+	int packetsSent;
+	int packetsReceived;
+	int numRetransmissions;
+	int numDupAcks;
+
+
 	// Retransmission variables
 	public class RetransmitTask {
 		public long scheduledTime;
@@ -72,9 +80,9 @@ public class Sender {
 		Comparator.comparingLong(t -> t.scheduledTime)
 	);
 
+
 	public static final int MAX_RETRANSMISSIONS = 16;
 	public static final int TCP_PACKET_LEN = 24;
-
 
 	public Sender(int port, String remote_ip, int remote_port, String filename, int mtu, int sws) {
 		this.port = port;
@@ -91,6 +99,12 @@ public class Sender {
 		this.teardownStarted = new AtomicBoolean(false);
 
 		this.timeout = 5;
+
+		this.bytesTransferred = 0;
+		this.packetsSent = 0;
+		this.packetsReceived = 0;
+		this.numRetransmissions = 0;
+		this.numDupAcks = 0;
 
 		try {
 			this.remote_ip = InetAddress.getByName(remote_ip);
@@ -119,8 +133,9 @@ public class Sender {
 			threadRetransmit.join();
 		} catch (Exception e) {	e.printStackTrace(); }
 
-		System.out.println("\nALL INFORMATION EXCHANGED\n");
+		// System.out.println("\nALL INFORMATION EXCHANGED\n");
 		tcpTeardownSender();
+		printMetrics();
 	}
 
 
@@ -130,23 +145,20 @@ public class Sender {
 		while(this.file_pos < this.file.length()) {
 			// Sender waits 
 			while(this.seg_send_ind.get() >= this.start_window.get() + this.sws) {  }
-			// Once window has space to send more
-
 			byte[] data = getData();          // get segment (parse from input file)
 			byte[] tcp = createGenTCP(data, this.seq_num);  // create tcp packet
-																											//
-			// TODO fix
-			// setRetransmission(this.seq_num, this.seg_send_ind.get(), data);
+			
+			// Set retransmission
 			toRetransmitSet.add(new RetransmitTask(System.nanoTime() + this.timeout, this.seq_num, this.seg_send_ind.get(), data));
 
 			// Map seq_num of packet to seg_num
 			this.seq_seg.put(this.seq_num + data.length, this.seg_send_ind.get());
-			
 	
 			// create udp (datagram packet) and send
 			try{
 				DatagramPacket UDP_packet = new DatagramPacket(tcp, tcp.length, this.remote_ip, this.remote_port);
 				socket.send(UDP_packet);
+				this.packetsSent++;
 			} catch (Exception e) { e.printStackTrace(); }
 			Util.outputSegmentInfo(true, Util.TCPGetTime(tcp), false, false, false, true, this.seq_num, data.length, 1);
 
@@ -155,16 +167,8 @@ public class Sender {
 			this.seg_send_ind.incrementAndGet();
 		}
 		teardownStarted.set(true);
-		System.out.println("\nSENDER SEN THREAD DONE!\n");
+		// System.out.println("\nSENDER SEN THREAD DONE!\n");
 	}
-
-
-	// Create retransmission task for scheduler
-	/*private void setRetransmission(int seq, int seg, byte[] data) {
-		// TODO convert timeout and nanotime units
-		// Insert the RetransmitTask to ConcurrentSkipListSet
-		toRetransmitSet.add(new RetransmitTask(System.nanoTime() + this.timeout, seq, seg, data));
-	}*/
 
 
 	// Receive acks from the receiver
@@ -173,11 +177,11 @@ public class Sender {
 		byte[] data = new byte[TCP_PACKET_LEN + mtu];
 		DatagramPacket packet = new DatagramPacket(data, data.length);
 		while(!all_received) { // sender has sent everything 
-			try {	socket.receive(packet); } 
+			try {	
+				socket.receive(packet);
+				this.packetsReceived++;
+			} 
 			catch (Exception e) { 
-				/*System.out.println("\nteardown Started: " + teardownStarted.get());
-				System.out.println("seg_send_ind: " + this.seg_send_ind.get());
-				System.out.println("start_window: " + this.start_window.get());*/
 				if(teardownStarted.get() && this.start_window.get() == this.seg_send_ind.get()) { all_received = true; }
 				continue;
 			}
@@ -198,19 +202,20 @@ public class Sender {
 			this.ERTT = (long)(0.875 * this.ERTT) + (long)((1-0.875) * SRTT);
 			this.EDEV = (long)(0.75 * this.EDEV) + (long)((1 - 0.75) * Math.abs(SRTT - this.ERTT));
 			this.timeout = this.ERTT + 4 * this.EDEV;
-			// System.out.println("\nTIMEOUT: " + this.timeout + "\n");
 
 			Util.outputSegmentInfo(false, timestamp, S, F, A, length > 0, seq, length, ack_num);
 
-			// TODO keep track of same acknowledgements - they cause errors
+			// TODO keep track of same acknowledgements 
 			int seg_num = 0; // the seq_num the receiver is acknowledging
 			if(seq_seg.containsKey(ack_num)) {
 				seg_num = seq_seg.get(ack_num);
 			} 
 			// This means that we received multiple acks or seq_seg does not contain ack_num
 			else {
-				//System.out.println("\n" + ack_num + "\n");
+				this.numDupAcks++;
 			}
+
+			this.bytesTransferred = Math.max(this.bytesTransferred, ack_num-1);
 
 			// Handle in order ACKs
 			if(seg_num == this.start_window.get()) {
@@ -248,7 +253,7 @@ public class Sender {
 		}
 		// Clear the buffer for retransmissions to address concurrency issues
 		toRetransmitSet.clear();
-		System.out.println("\nSENDER REC THREAD DONE!\n");
+		// System.out.println("\nSENDER REC THREAD DONE!\n");
 	}
 
 
@@ -264,10 +269,11 @@ public class Sender {
 		ByteBuffer.wrap(TCP_packet).putLong(8, System.nanoTime());
 		ByteBuffer.wrap(TCP_packet).putInt(16, len_flag);
 		
+		DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length,
+			remote_ip, remote_port);
 		try {
-			DatagramPacket UDP_packet = new DatagramPacket(TCP_packet, TCP_packet.length,
-				remote_ip, remote_port);
 			socket.send(UDP_packet);
+			this.packetsSent++;
 			Util.outputSegmentInfo(true, Util.TCPGetTime(TCP_packet), true, false, false, false, this.seq_num, 0, 0);
 			this.seq_num ++;
 		} catch (Exception e) { e.printStackTrace(); }
@@ -277,14 +283,23 @@ public class Sender {
 			while(true) {
 				byte[] data = new byte[TCP_PACKET_LEN];
 				DatagramPacket packet = new DatagramPacket(data, data.length);
-				socket.receive(packet);
+
+				try {
+					socket.receive(packet);
+					this.packetsReceived++;
+				} catch (SocketTimeoutException e) {
+					socket.send(UDP_packet);
+					this.packetsSent++;
+					Util.outputSegmentInfo(true, Util.TCPGetTime(TCP_packet), true, false, false, false, this.seq_num-1, 0, 0);
+					continue;
+				}
+
 				byte[] packet_data = packet.getData();
 
 				// Calculate timeout
 				this.ERTT = (System.nanoTime() - Util.TCPGetTime(packet_data));
 				this.EDEV = 0;
 				this.timeout = 2 * this.ERTT;
-				// System.out.println("\nTIMEOUT: " + this.timeout + "\n");
 
 				Util.outputSegmentInfo(false, Util.TCPGetTime(packet_data), 
 					Util.TCPGetSYN(packet_data), Util.TCPGetFIN(packet_data), Util.TCPGetACK(packet_data),
@@ -301,11 +316,11 @@ public class Sender {
 					ByteBuffer.wrap(ack_data).putInt(4, seq_num_rec);    // ack num
 					ByteBuffer.wrap(ack_data).putLong(8, System.nanoTime());
 					ByteBuffer.wrap(ack_data).putInt(16, len_flag1);
-					DatagramPacket UDP_packet = new DatagramPacket(ack_data, ack_data.length,
+					DatagramPacket UDP_packet2 = new DatagramPacket(ack_data, ack_data.length,
 						remote_ip, remote_port);
-					socket.send(UDP_packet);
+					socket.send(UDP_packet2);
+					this.packetsSent++;
 					Util.outputSegmentInfo(true, Util.TCPGetTime(ack_data), false, false, true, false, this.seq_num, 0, seq_num_rec);
-					// this.seq_num ++;
 					break;
 				}
 			}
@@ -326,9 +341,10 @@ public class Sender {
 		ByteBuffer.wrap(Fin_TCP).putInt(4, 1);
 		ByteBuffer.wrap(Fin_TCP).putLong(8, time);
 		ByteBuffer.wrap(Fin_TCP).putInt(16, len_flag);
+		DatagramPacket UDP_packet = new DatagramPacket(Fin_TCP, Fin_TCP.length, remote_ip, remote_port);
 		try {
-			DatagramPacket UDP_packet = new DatagramPacket(Fin_TCP, Fin_TCP.length, remote_ip, remote_port);
 			socket.send(UDP_packet);
+			this.packetsSent++;
 			Util.outputSegmentInfo(true, time, false, true, false, false, seq_num, 0, 1);
 		} catch (Exception e) { e.printStackTrace(); }
 		
@@ -338,8 +354,16 @@ public class Sender {
 			DatagramPacket packet = new DatagramPacket(Fin_Ack_TCP, Fin_Ack_TCP.length);
 			byte[] packetData = packet.getData();
 
-			try {	socket.receive(packet); } 
-			catch (Exception e) { e.printStackTrace(); }
+			try {
+				socket.receive(packet); 
+				this.packetsReceived++;
+			} 
+			catch(SocketTimeoutException e) {
+				try {
+					socket.send(UDP_packet);
+					this.packetsSent++;
+				} catch (Exception ee) { ee.printStackTrace(); }
+			} catch (Exception e) { e.printStackTrace(); }
 			boolean A = Util.TCPGetACK(packetData);
 			boolean F = Util.TCPGetFIN(packetData);
 
@@ -363,6 +387,7 @@ public class Sender {
 				try {
 					DatagramPacket UDP_packet2 = new DatagramPacket(Ack_TCP, Ack_TCP.length, remote_ip, remote_port);
 					socket.send(UDP_packet2);
+					this.packetsSent++;
 					Util.outputSegmentInfo(true, time, false, false, true, false, ack, 0, seq + 1);
 				} catch (Exception e) { e.printStackTrace(); }
 				return;
@@ -384,24 +409,27 @@ public class Sender {
 			RetransmitTask t = toRetransmitSet.pollFirst();
 			long currTime = System.nanoTime();
 
-			// System.out.println("scheduledTime: " + t.scheduledTime/1_000_000 + " currTime: " + currTime/1_000_000);
 			if(t.scheduledTime <= currTime) {
-				// System.out.println("ACTUALLY RETRANSMITTING!");
+				// TODO tell the Sender rec thread to forget about it if max number of retransmissions
+				if(t.numberOfRetransmissions == MAX_RETRANSMISSIONS) {
+					// Somehow update window start && seg_num
+					continue;
+				}
 				t.run();
 				t.numberOfRetransmissions++;
+				this.numRetransmissions++;
+				this.packetsSent++;
 
 				// After retransmission, reschedule the scheduledTime
 				t.scheduledTime += this.timeout;
 				toRetransmitSet.add(t);
-
-				// TODO tell the Sender rec thread to forget about it if max number of retransmissions
 			} 
 			// If we not timeout yet, don't forget to add it back into the buffer
 			else {
 				toRetransmitSet.add(t);
 			}
 		}
-		System.out.println("RETRANSMISSION THREAD COMPLETE!");
+		// System.out.println("RETRANSMISSION THREAD COMPLETE!");
 	}
 
 
@@ -411,7 +439,7 @@ public class Sender {
 		try {
 			int bytesRead = fis.read(data);
 			if (bytesRead == -1) {
-				System.out.println("Reached EOF");
+				// System.out.println("Reached EOF");
 			} 
 			file_pos += bytesRead;
 			if (bytesRead < mtu) {
@@ -420,7 +448,7 @@ public class Sender {
 				return trimmed;
 			}
 		} catch (Exception e) {
-			System.out.println("Problem with reading byte");
+			// System.out.println("Problem with reading byte");
 		}
 		return data;
 	}
@@ -446,15 +474,16 @@ public class Sender {
 		return TCP_packet;
 	}
 
+	// Print metrics
+	private void printMetrics() {
+		System.out.println("\nAmount of Data Transferred: " + this.bytesTransferred);
+		System.out.println("Number of Packets Sent: " + this.packetsSent);
+		System.out.println("Number of Packets Received: " + this.packetsReceived);
+		System.out.println("Number of Out-Of-Sequence Packets discarded: 0");
+		System.out.println("Number of Packets discarded due to incorrect checksum: 0");
+		System.out.println("Number of Retransmissions: " + this.numRetransmissions);
+		System.out.println("Number of Duplicate Acks: " + this.numDupAcks);
+	}
 }
-
-
-
-
-// debugging
-// Print byte[] in terms of bits
-/*for (byte b : tcp) {
-	System.out.print(Integer.toBinaryString((b & 0xFF) + 0x100).substring(1) + " ");
-}*/
 
 
