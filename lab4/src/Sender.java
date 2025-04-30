@@ -32,6 +32,8 @@ public class Sender {
 	// Map next sequence num from Receiver to segment number
 	ConcurrentHashMap<Integer, Integer> seq_seg = new ConcurrentHashMap<>();
 
+	// HashMap<Integer, Integer> seg_numAck = new HashMap<>();
+
 	FileInputStream fis; // will read input file per byte 
 	File file;
 
@@ -115,7 +117,7 @@ public class Sender {
 			file = new File(this.filename);
 			socket = new DatagramSocket(port);
 			socket.setSoTimeout(5000);
-		} catch (Exception e) { e.printStackTrace(); }
+		} catch (Exception e) {} //e.printStackTrace(); }
 
 		tcpHandshakeSender();
 
@@ -235,7 +237,6 @@ public class Sender {
 			else if(seg_num > this.start_window.get()) {
 				// System.out.println("------OUT OF ORDER ACK RECEIVED!---------");
 				this.start_window.set(seg_num+1);
-				// TODO Remove all seq_seg entries < seg_num (NOT IMPORTANT)
 				// Cancel retransmission tasks
 				Iterator<RetransmitTask> it = toRetransmitSet.iterator();
 				while(it.hasNext()) {
@@ -349,7 +350,8 @@ public class Sender {
 		} catch (Exception e) { e.printStackTrace(); }
 		
 		// sender receive fin ack from receiver
-		while(true) {
+		int hardlimit = 0;
+		while(hardlimit < 8) {
 			byte[] Fin_Ack_TCP = new byte[TCP_PACKET_LEN];
 			DatagramPacket packet = new DatagramPacket(Fin_Ack_TCP, Fin_Ack_TCP.length);
 			byte[] packetData = packet.getData();
@@ -362,6 +364,8 @@ public class Sender {
 				try {
 					socket.send(UDP_packet);
 					this.packetsSent++;
+					hardlimit++;
+					continue;
 				} catch (Exception ee) { ee.printStackTrace(); }
 			} catch (Exception e) { e.printStackTrace(); }
 			boolean A = Util.TCPGetACK(packetData);
@@ -409,12 +413,15 @@ public class Sender {
 			RetransmitTask t = toRetransmitSet.pollFirst();
 			long currTime = System.nanoTime();
 
+			if(t == null) { continue; }
 			if(t.scheduledTime <= currTime) {
 				// TODO tell the Sender rec thread to forget about it if max number of retransmissions
-				if(t.numberOfRetransmissions == MAX_RETRANSMISSIONS) {
-					// Somehow update window start && seg_num
+				/*if(t.numberOfRetransmissions == MAX_RETRANSMISSIONS) {
+					System.out.println("\nMAX RETRANSMISSIONS!\n");
+					this.start_window.incrementAndGet();
+					this.seg_send_ind.set(this.seg_send_ind.get()-1);
 					continue;
-				}
+				}*/
 				t.run();
 				t.numberOfRetransmissions++;
 				this.numRetransmissions++;

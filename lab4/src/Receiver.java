@@ -167,50 +167,53 @@ public class Receiver {
 				Util.TCPGetSYN(packet_data), Util.TCPGetFIN(packet_data), Util.TCPGetACK(packet_data),
 				false, Util.TCPGetSeqNum(packet_data), 0, Util.TCPGetAckNum(packet_data));
 
-			if(Util.TCPGetSYN(packet_data)) {
-				// Receiver sends ACK
-				int len_flag1 = 0;
-				int seq_num_rec = Util.TCPGetSeqNum(packet_data) + 1;
-				len_flag1 = (len_flag1 << 1) | 1;
-				len_flag1 = len_flag1 << 1;
-				len_flag1 = (len_flag1 << 1) | 1;
-				byte[] ack_data = new byte[TCP_PACKET_LEN];
-				ByteBuffer.wrap(ack_data).putInt(0, this.seq_num);
-				ByteBuffer.wrap(ack_data).putInt(4, seq_num_rec);
-				ByteBuffer.wrap(ack_data).putLong(8, System.nanoTime());
-				ByteBuffer.wrap(ack_data).putInt(16, len_flag1);
-
-				// Get the sender's ip and port 
-				this.remote_ip = InetAddress.getByName(packet.getAddress().getHostAddress());
-				this.remote_port = packet.getPort();
-
-				DatagramPacket packet2 = new DatagramPacket(ack_data, ack_data.length, remote_ip, remote_port);
-				socket.send(packet2);
-				this.packetsSent++;
-				Util.outputSegmentInfo(true, Util.TCPGetTime(ack_data), true, false, true, false, this.seq_num, 0, seq_num_rec);
-				this.seq_num ++;
-
-				// Receive the last part of the 3 way handshake
-				byte[] data3 = new byte[TCP_PACKET_LEN];
-				DatagramPacket packet3 = new DatagramPacket(data, data.length);
-				this.socket.setSoTimeout(5000);
-				// TODO need to recalculate time
-				try {
-					socket.receive(packet3);
-					this.packetsReceived++;
-				} catch (SocketTimeoutException e) { 
-					socket.send(packet2); 
+			while(true) {
+				if(Util.TCPGetSYN(packet_data)) {
+					// Receiver sends ACK
+					int len_flag1 = 0;
+					int seq_num_rec = Util.TCPGetSeqNum(packet_data) + 1;
+					len_flag1 = (len_flag1 << 1) | 1;
+					len_flag1 = len_flag1 << 1;
+					len_flag1 = (len_flag1 << 1) | 1;
+					byte[] ack_data = new byte[TCP_PACKET_LEN];
+					ByteBuffer.wrap(ack_data).putInt(0, this.seq_num);
+					ByteBuffer.wrap(ack_data).putInt(4, seq_num_rec);
+					ByteBuffer.wrap(ack_data).putLong(8, System.nanoTime());
+					ByteBuffer.wrap(ack_data).putInt(16, len_flag1);
+					this.remote_ip = InetAddress.getByName(packet.getAddress().getHostAddress());
+					this.remote_port = packet.getPort();
+					DatagramPacket packet2 = new DatagramPacket(ack_data, ack_data.length, remote_ip, remote_port);
+					socket.send(packet2);
 					this.packetsSent++;
 					Util.outputSegmentInfo(true, Util.TCPGetTime(ack_data), true, false, true, false, this.seq_num, 0, seq_num_rec);
-				}
+					this.seq_num ++;
 
-				byte[] packet_data3 = packet.getData();
-				Util.outputSegmentInfo(false, Util.TCPGetTime(packet_data3), 
-					Util.TCPGetSYN(packet_data3), Util.TCPGetFIN(packet_data3), Util.TCPGetACK(packet_data3),
-					false, Util.TCPGetSeqNum(packet_data3), 0, Util.TCPGetAckNum(packet_data3));
-				// This means that sender's ack was dropped and sender is sending data. Just start accepting it
-				if(!Util.TCPGetACK(packet_data3)) {
-					return;
+					// Receive the last part of the 3 way handshake
+					byte[] data3 = new byte[TCP_PACKET_LEN];
+					DatagramPacket packet3 = new DatagramPacket(data, data.length);
+					this.socket.setSoTimeout(5000);
+					// TODO need to recalculate time
+					try {
+						socket.receive(packet3);
+						this.packetsReceived++;
+					} catch (SocketTimeoutException e) { 
+						socket.send(packet2); 
+						this.packetsSent++;
+						Util.outputSegmentInfo(true, Util.TCPGetTime(ack_data), true, false, true, false, this.seq_num, 0, seq_num_rec);
+					}
+
+					byte[] packet_data3 = packet.getData();
+					Util.outputSegmentInfo(false, Util.TCPGetTime(packet_data3), 
+						Util.TCPGetSYN(packet_data3), Util.TCPGetFIN(packet_data3), 
+						Util.TCPGetACK(packet_data3), false, Util.TCPGetSeqNum(packet_data3), 
+						0, Util.TCPGetAckNum(packet_data3));
+					// This means that sender's ack was dropped and sender is sending data. Just start accepting it
+					if(Util.TCPGetSYN(packet_data3)) { continue; }
+					if(!Util.TCPGetACK(packet_data3)) {
+						//return;
+						break;
+					}
+					break;
 				}
 			}
 			this.socket.setSoTimeout(0);
@@ -243,11 +246,11 @@ public class Receiver {
 		byte[] TCP_packet2 = new byte[TCP_PACKET_LEN];
 		DatagramPacket UDP_packet2 = new DatagramPacket(TCP_packet2, TCP_packet2.length);
 		try {	
+			socket.setSoTimeout(5000);
 			socket.receive(UDP_packet2); 
 			this.packetsReceived++;
 		} 
 		catch (SocketTimeoutException e) { 
-			e.printStackTrace(); 
 			return;
 		} catch (Exception ee) { ee.printStackTrace(); }
 		byte[] packetData = UDP_packet2.getData();
